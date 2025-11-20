@@ -1,0 +1,37 @@
+{
+  "job_name": "pusht_diffusion_coverTee",
+  "steps": 150000,
+  "save_freq": 150000,
+  "eval_freq": 10000,
+  "log_freq": 500,
+  "batch_size": 64,
+  "dataset": {
+    "repo_id": "lerobot/pusht",
+    "image_transforms": {
+      "enable": true,
+      "tfs": {
+        "CoverGreenT": {
+          "weight": 1.0,
+          "type": "CoverGreenT"
+        }
+      }
+    }
+  },
+  "env": {
+    "type": "pusht",
+    "CoverGreenT": {
+          "weight": 1.0,
+          "type": "CoverGreenT"
+        },
+    "visualization_width": 96,
+    "visualization_height": 96
+  },
+  "policy": {
+    "repo_id": "OliverHausdoerfer/diffusion_pusht_v1",
+    "type": "diffusion"
+  },
+  "wandb": {
+    "enable": true,
+    "project": "policies"
+  }
+}

@@ -14,9 +14,10 @@
 
 import abc
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Union, List
 
 import draccus
+from torchvision.transforms.functional import gaussian_blur
 
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.robots import RobotConfig
@@ -123,6 +124,8 @@ class PushtEnv(EnvConfig):
             "pixels": OBS_IMAGE,
         }
     )
+    gaussian_blur: dict[str, Union[int, List[int]]] | None = None
+    CoverGreenT: dict[str, Any] | None = None
 
     def __post_init__(self):
         if self.obs_type == "pixels_agent_pos":
@@ -140,6 +143,8 @@ class PushtEnv(EnvConfig):
             "visualization_width": self.visualization_width,
             "visualization_height": self.visualization_height,
             "max_episode_steps": self.episode_length,
+            "gaussian_blur": self.gaussian_blur,
+            "CoverGreenT": self.CoverGreenT,
         }
 
 

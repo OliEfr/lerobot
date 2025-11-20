@@ -1,0 +1,12 @@
+{
+    "repo_id": "lerobot/pusht",
+    "image_transforms": {
+        "enable": true,
+        "tfs": {
+            "CoverGreenT": {
+                "weight": 1.0,
+                "type": "CoverGreenT"
+            }
+        }
+    }
+}
