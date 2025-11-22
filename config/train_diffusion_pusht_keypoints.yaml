@@ -1,0 +1,35 @@
+<<: !include base_diffusion.yaml
+
+job_name: pusht_diffusion_keypoints
+env:
+  type: pusht
+  visualization_width: 96
+  visualization_height: 96
+  obs_type: environment_state_agent_pos
+  features:
+    action:
+      type: ACTION
+      shape:
+        - 2
+    agent_pos:
+      type: STATE
+      shape:
+        - 2
+    environment_state:
+      type: ENV
+      shape:
+        - 16
+policy:
+  repo_id: OliverHausdoerfer/diffusion_pusht_v1
+  type: diffusion
+  optimizer_lr: 0.0002
+  input_features:
+    observation.state:
+      type: STATE
+      shape:
+        - 2
+    observation.environment_state:
+      type: ENV
+      shape:
+        - 16
+

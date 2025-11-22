@@ -1,0 +1,15 @@
+job_name: pusht_diffusion
+steps: 150_000
+save_freq: 150_000
+eval_freq: 10_000
+log_freq: 500
+batch_size: 128
+dataset:
+  repo_id: the-future-dev/pusht_image_keypoints
+  image_transforms:
+    enable: false
+wandb:
+  enable: true
+  project: policies
+rename_map: # Hack: this needs to be set in order to pass validate_visual_features_consistency when not having image inputs.
+  dummy: dummy

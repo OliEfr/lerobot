@@ -101,8 +101,8 @@ def draw_lightgreen_square(img: torch.Tensor) -> torch.Tensor:
     output = img.clone()
     
     # Hardcoded coordinates (top-left and bottom-right corners)
-    start_y, start_x = 35, 27  # Top-left corner
-    end_y, end_x = start_y+35, start_x+35      # Bottom-right corner
+    start_y, start_x = 30, 25  # Top-left corner
+    end_y, end_x = start_y+40, start_x+40      # Bottom-right corner
     
     # Target color LightGreen (RGB)
     target_color = torch.tensor([144, 238, 144], dtype=torch.uint8, device=output.device)
@@ -131,17 +131,17 @@ def draw_lightgreen_square(img: torch.Tensor) -> torch.Tensor:
     region = output[..., start_y:end_y, start_x:end_x]
     
     # Find white pixels (all channels equal to white value)
-    threshold = 0.1 if output.dtype in [torch.float32, torch.float64] else 10
-    is_white = torch.all(torch.abs(region - white) < threshold, dim=-3, keepdim=True)
+    # threshold = 0.1 if output.dtype in [torch.float32, torch.float64] else 10
+    # is_white = torch.all(torch.abs(region - white) < threshold, dim=-3, keepdim=True)
 
-    threshold = 0.79 if output.dtype in [torch.float32, torch.float64] else 200
-    is_light_green = (region[1,...] > threshold).unsqueeze(0)  # Add dimension to match [1, 35, 35]
+    # threshold = 0.79 if output.dtype in [torch.float32, torch.float64] else 200
+    # is_light_green = (region[1,...] > threshold).unsqueeze(0)  # Add dimension to match [1, 35, 35]
 
     # Combine the conditions
-    mask = is_white | is_light_green
+    # mask = is_white | is_light_green
     
     # Fill only white pixels with lightgreen
-    output[..., start_y:end_y, start_x:end_x] = torch.where(mask, target, region)
+    output[..., start_y:end_y, start_x:end_x] = target # torch.where(mask, target, region)
     
     return output
 
