@@ -2,6 +2,27 @@
 
 job_name: train_diffusion_pusht_visual_coverTee
 dataset:
+  env:
+  type: pusht
+  visualization_width: 96
+  visualization_height: 96
+  obs_type: pixels_agent_pos
+  features:
+    action:
+      type: ACTION
+      shape:
+        - 2
+    agent_pos:
+      type: STATE
+      shape:
+        - 2
+    pixels:
+      type: VISUAL
+      shape:
+        - 3
+        - 96
+        - 96
+  CoverGreenT: true
   repo_id: the-future-dev/pusht_image_keypoints
   image_transforms:
     enable: true
