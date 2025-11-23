@@ -13,6 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import sys
 import logging
 import time
 from contextlib import nullcontext
@@ -146,6 +147,13 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     # It will automatically detect if running in distributed mode or single-process mode
     # We set step_scheduler_with_optimizer=False to prevent accelerate from adjusting the lr_scheduler steps based on the num_processes
     # We set find_unused_parameters=True to handle models with conditional computation
+    # if __debug__:
+    #     cfg.wandb.enable = False
+    gettrace = getattr(sys, "gettrace", None)
+    if gettrace():
+        print("Debugging in VSCode, disabling wandb.")
+        cfg.wandb.enable = False
+
     if accelerator is None:
         from accelerate.utils import DistributedDataParallelKwargs
 
