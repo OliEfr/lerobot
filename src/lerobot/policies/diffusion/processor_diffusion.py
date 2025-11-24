@@ -27,6 +27,7 @@ from lerobot.processor import (
     PolicyProcessorPipeline,
     RenameObservationsProcessorStep,
     UnnormalizerProcessorStep,
+    PartialGreenTCoverProcessorStep,
 )
 from lerobot.processor.converters import policy_action_to_transition, transition_to_policy_action
 from lerobot.utils.constants import POLICY_POSTPROCESSOR_DEFAULT_NAME, POLICY_PREPROCESSOR_DEFAULT_NAME
@@ -62,16 +63,20 @@ def make_diffusion_pre_post_processors(
         A tuple containing the configured pre-processor and post-processor pipelines.
     """
 
-    input_steps = [
-        RenameObservationsProcessorStep(rename_map={}),
-        AddBatchDimensionProcessorStep(),
-        DeviceProcessorStep(device=config.device),
-        NormalizerProcessorStep(
-            features={**config.input_features, **config.output_features},
-            norm_map=config.normalization_mapping,
-            stats=dataset_stats,
-        ),
-    ]
+    input_steps = []
+
+    if config.partial_green_t_cover_processor:
+        input_steps.append(PartialGreenTCoverProcessorStep())
+
+    input_steps.append(RenameObservationsProcessorStep(rename_map={}))
+    input_steps.append(AddBatchDimensionProcessorStep())
+    input_steps.append(DeviceProcessorStep(device=config.device))
+    input_steps.append(NormalizerProcessorStep(
+        features={**config.input_features, **config.output_features},
+        norm_map=config.normalization_mapping,
+        stats=dataset_stats,
+    ))
+
     output_steps = [
         UnnormalizerProcessorStep(
             features=config.output_features, norm_map=config.normalization_mapping, stats=dataset_stats

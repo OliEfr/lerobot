@@ -25,6 +25,13 @@ from torchvision.transforms.v2 import (
     functional as F,  # noqa: N812
 )
 
+from lerobot.utils.constants import (
+    COVER_GREEN_T_END_X,
+    COVER_GREEN_T_END_Y,
+    COVER_GREEN_T_START_X,
+    COVER_GREEN_T_START_Y,
+)
+
 
 class RandomSubsetApply(Transform):
     """Apply a random subset of N transformations from a list of transformations.
@@ -94,27 +101,34 @@ class RandomSubsetApply(Transform):
             f"random_order={self.random_order}"
         )
 
+
 def draw_lightgreen_square(img: torch.Tensor) -> torch.Tensor:
     if not isinstance(img, torch.Tensor) or img.dim() < 3:
         raise TypeError(f"Wrong input format.")
-    
+
     output = img.clone()
-    
-    # Hardcoded coordinates (top-left and bottom-right corners)
-    start_y, start_x = 30, 25  # Top-left corner
-    end_y, end_x = start_y+40, start_x+40      # Bottom-right corner
-    
+
     # Target color LightGreen (RGB)
-    target_color = torch.tensor([144, 238, 144], dtype=torch.uint8, device=output.device)
-    
+    target_color = torch.tensor(
+        [144, 238, 144], dtype=torch.uint8, device=output.device
+    )
+
     *batch_dims, C, H, W = output.shape
-    
+
     # Ensure coordinates are within bounds
-    start_y = max(0, min(start_y, H))
-    start_x = max(0, min(start_x, W))
-    end_y = max(0, min(end_y, H))
-    end_x = max(0, min(end_x, W))
-    
+    assert (
+        0 <= COVER_GREEN_T_START_Y <= H
+    ), f"COVER_GREEN_T_START_Y out of bounds: {COVER_GREEN_T_START_Y}"
+    assert (
+        0 <= COVER_GREEN_T_START_X <= W
+    ), f"COVER_GREEN_T_START_X out of bounds: {COVER_GREEN_T_START_X}"
+    assert (
+        0 <= COVER_GREEN_T_END_Y <= H
+    ), f"COVER_GREEN_T_END_Y out of bounds: {COVER_GREEN_T_END_Y}"
+    assert (
+        0 <= COVER_GREEN_T_END_X <= W
+    ), f"COVER_GREEN_T_END_X out of bounds: {COVER_GREEN_T_END_X}"
+
     # Convert target color to match image dtype
     if output.dtype == torch.float32 or output.dtype == torch.float64:
         target = target_color.float() / 255.0
@@ -122,14 +136,18 @@ def draw_lightgreen_square(img: torch.Tensor) -> torch.Tensor:
     else:
         target = target_color.to(output.dtype)
         white = torch.tensor([255, 255, 255], dtype=output.dtype, device=output.device)
-    
+
     # Reshape for broadcasting
     target = target.view(C, 1, 1)
     white = white.view(C, 1, 1)
-    
+
     # Get the region to modify
-    region = output[..., start_y:end_y, start_x:end_x]
-    
+    region = output[
+        ...,
+        COVER_GREEN_T_START_Y:COVER_GREEN_T_END_Y,
+        COVER_GREEN_T_START_X:COVER_GREEN_T_END_X,
+    ]
+
     # Find white pixels (all channels equal to white value)
     # threshold = 0.1 if output.dtype in [torch.float32, torch.float64] else 10
     # is_white = torch.all(torch.abs(region - white) < threshold, dim=-3, keepdim=True)
@@ -139,10 +157,14 @@ def draw_lightgreen_square(img: torch.Tensor) -> torch.Tensor:
 
     # Combine the conditions
     # mask = is_white | is_light_green
-    
+
     # Fill only white pixels with lightgreen
-    output[..., start_y:end_y, start_x:end_x] = target # torch.where(mask, target, region)
-    
+    output[
+        ...,
+        COVER_GREEN_T_START_Y:COVER_GREEN_T_END_Y,
+        COVER_GREEN_T_START_X:COVER_GREEN_T_END_X,
+    ] = target  # torch.where(mask, target, region)
+
     return output
 
 
@@ -158,8 +180,6 @@ class CoverGreenT(Transform):
     def transform(self, inpt: Any, params: dict[str, Any]) -> Any:
         """Apply the transform to the input image."""
         return draw_lightgreen_square(inpt)
-
-
 
 
 class SharpnessJitter(Transform):

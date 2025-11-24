@@ -244,6 +244,9 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             },
         }
 
+    if cfg.policy.partial_green_t_cover_processor:
+        assert cfg.env.task == "PushT-v0", "This processor is only compatible with PushT-v0"
+        assert "environment_state" in cfg.env.features and "observation.environment_state" in cfg.policy.input_features, "You probably want to use the environment state in your env and policy when using partial_green_t_cover_processor."
     preprocessor, postprocessor = make_pre_post_processors(
         policy_cfg=cfg.policy,
         pretrained_path=cfg.policy.pretrained_path,

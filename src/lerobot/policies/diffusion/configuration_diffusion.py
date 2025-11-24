@@ -159,6 +159,9 @@ class DiffusionConfig(PreTrainedConfig):
     optimizer_weight_decay: float = 1e-6
     scheduler_name: str = "cosine"
     scheduler_warmup_steps: int = 500
+    
+    # Processors
+    partial_green_t_cover_processor: bool = False
 
     def __post_init__(self):
         super().__post_init__()

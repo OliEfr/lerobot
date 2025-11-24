@@ -75,6 +75,7 @@ from .policy_robot_bridge import (
     RobotActionToPolicyActionProcessorStep,
 )
 from .rename_processor import RenameObservationsProcessorStep
+from .partialGreenTCover_processor import PartialGreenTCoverProcessorStep
 from .tokenizer_processor import TokenizerProcessorStep
 
 __all__ = [
@@ -115,6 +116,7 @@ __all__ = [
     "RobotActionProcessorStep",
     "RobotObservation",
     "RenameObservationsProcessorStep",
+    "PartialGreenTCoverProcessorStep"
     "RewardClassifierProcessorStep",
     "RewardProcessorStep",
     "DataProcessorPipeline",

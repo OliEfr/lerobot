@@ -70,3 +70,14 @@ LOOKAHEAD_BACKTRACKTABLE = 100
 
 # openpi
 OPENPI_ATTENTION_MASK_VALUE = -2.3819763e38  # TODO(pepijn): Modify this when extending support to fp8 models
+
+
+COVER_GREEN_T_START_X = 25
+COVER_GREEN_T_START_Y = 30
+COVER_GREEN_T_END_X = 65
+COVER_GREEN_T_END_Y = 70
+
+
+
+
+
