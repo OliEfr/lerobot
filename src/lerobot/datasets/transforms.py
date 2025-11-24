@@ -26,10 +26,10 @@ from torchvision.transforms.v2 import (
 )
 
 from lerobot.utils.constants import (
-    COVER_GREEN_T_END_X,
-    COVER_GREEN_T_END_Y,
-    COVER_GREEN_T_START_X,
-    COVER_GREEN_T_START_Y,
+    COVER_GREEN_T_END_X_VIS,
+    COVER_GREEN_T_END_Y_VIS,
+    COVER_GREEN_T_START_X_VIS,
+    COVER_GREEN_T_START_Y_VIS,
 )
 
 
@@ -117,17 +117,17 @@ def draw_lightgreen_square(img: torch.Tensor) -> torch.Tensor:
 
     # Ensure coordinates are within bounds
     assert (
-        0 <= COVER_GREEN_T_START_Y <= H
-    ), f"COVER_GREEN_T_START_Y out of bounds: {COVER_GREEN_T_START_Y}"
+        0 <= COVER_GREEN_T_START_Y_VIS <= H
+    ), f"COVER_GREEN_T_START_Y_VIS out of bounds: {COVER_GREEN_T_START_Y_VIS}"
     assert (
-        0 <= COVER_GREEN_T_START_X <= W
-    ), f"COVER_GREEN_T_START_X out of bounds: {COVER_GREEN_T_START_X}"
+        0 <= COVER_GREEN_T_START_X_VIS <= W
+    ), f"COVER_GREEN_T_START_X_VIS out of bounds: {COVER_GREEN_T_START_X_VIS}"
     assert (
-        0 <= COVER_GREEN_T_END_Y <= H
-    ), f"COVER_GREEN_T_END_Y out of bounds: {COVER_GREEN_T_END_Y}"
+        0 <= COVER_GREEN_T_END_Y_VIS <= H
+    ), f"COVER_GREEN_T_END_Y_VIS out of bounds: {COVER_GREEN_T_END_Y_VIS}"
     assert (
-        0 <= COVER_GREEN_T_END_X <= W
-    ), f"COVER_GREEN_T_END_X out of bounds: {COVER_GREEN_T_END_X}"
+        0 <= COVER_GREEN_T_END_X_VIS <= W
+    ), f"COVER_GREEN_T_END_X_VIS out of bounds: {COVER_GREEN_T_END_X_VIS}"
 
     # Convert target color to match image dtype
     if output.dtype == torch.float32 or output.dtype == torch.float64:
@@ -144,8 +144,8 @@ def draw_lightgreen_square(img: torch.Tensor) -> torch.Tensor:
     # Get the region to modify
     region = output[
         ...,
-        COVER_GREEN_T_START_Y:COVER_GREEN_T_END_Y,
-        COVER_GREEN_T_START_X:COVER_GREEN_T_END_X,
+        COVER_GREEN_T_START_Y_VIS:COVER_GREEN_T_END_Y_VIS,
+        COVER_GREEN_T_START_X_VIS:COVER_GREEN_T_END_X_VIS,
     ]
 
     # Find white pixels (all channels equal to white value)
@@ -161,8 +161,8 @@ def draw_lightgreen_square(img: torch.Tensor) -> torch.Tensor:
     # Fill only white pixels with lightgreen
     output[
         ...,
-        COVER_GREEN_T_START_Y:COVER_GREEN_T_END_Y,
-        COVER_GREEN_T_START_X:COVER_GREEN_T_END_X,
+        COVER_GREEN_T_START_Y_VIS:COVER_GREEN_T_END_Y_VIS,
+        COVER_GREEN_T_START_X_VIS:COVER_GREEN_T_END_X_VIS,
     ] = target  # torch.where(mask, target, region)
 
     return output

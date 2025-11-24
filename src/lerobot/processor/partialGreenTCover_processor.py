@@ -17,10 +17,10 @@ from dataclasses import dataclass, field
 
 from lerobot.configs.types import PipelineFeatureType, PolicyFeature
 from lerobot.utils.constants import (
-    COVER_GREEN_T_END_X,
-    COVER_GREEN_T_END_Y,
-    COVER_GREEN_T_START_X,
-    COVER_GREEN_T_START_Y,
+    COVER_GREEN_T_END_X_STATE,
+    COVER_GREEN_T_END_Y_STATE,
+    COVER_GREEN_T_START_X_STATE,
+    COVER_GREEN_T_START_Y_STATE,
 )
 
 from .pipeline import ObservationProcessorStep, ProcessorStepRegistry
@@ -58,11 +58,11 @@ class PartialGreenTCoverProcessorStep(ObservationProcessorStep):
         x_coords = keypoints_reshaped[..., 0]
         y_coords = keypoints_reshaped[..., 1]
 
-        inside_x = (x_coords >= COVER_GREEN_T_START_X) & (
-            x_coords <= COVER_GREEN_T_END_X
+        inside_x = (x_coords >= COVER_GREEN_T_START_X_STATE) & (
+            x_coords <= COVER_GREEN_T_END_X_STATE
         )
-        inside_y = (y_coords >= COVER_GREEN_T_START_Y) & (
-            y_coords <= COVER_GREEN_T_END_Y
+        inside_y = (y_coords >= COVER_GREEN_T_START_Y_STATE) & (
+            y_coords <= COVER_GREEN_T_END_Y_STATE
         )
         inside_rect = inside_x & inside_y
 
@@ -71,9 +71,9 @@ class PartialGreenTCoverProcessorStep(ObservationProcessorStep):
         sufficient_coverage = (num_covered >= self.threshold)
 
         self._metrics = {
-            "partial_green_t_cover_processor/num_covered": num_covered.float().mean().item(),
-            "partial_green_t_cover_processor/ratio": (num_covered.float().mean() / keypoints_reshaped.shape[2]).item(),
-            "partial_green_t_cover_processor/sufficient_coverage": sufficient_coverage.float().mean().item()
+            "partial_green_t_cover_processor/num_covered_mean": num_covered.float().mean().detach().clone().item(),
+            "partial_green_t_cover_processor/num_covered_ratio": (num_covered.float().mean() / keypoints_reshaped.shape[2]).detach().clone().item(),
+            "partial_green_t_cover_processor/sufficient_coverage_ratio": sufficient_coverage.float().mean().detach().clone().item()
         }
 
         sufficient_coverage = sufficient_coverage.unsqueeze(2)
