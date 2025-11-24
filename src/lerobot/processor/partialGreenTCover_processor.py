@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from lerobot.configs.types import PipelineFeatureType, PolicyFeature
 from lerobot.utils.constants import (
@@ -31,16 +31,21 @@ from .pipeline import ObservationProcessorStep, ProcessorStepRegistry
 class PartialGreenTCoverProcessorStep(ObservationProcessorStep):
     """This processor decides whether to return the environment_state (keypoints of the tee) or zeros depending on some condition."""
 
-    threshold: int = 12
+    threshold: int = 6
+    _metrics: dict = field(default_factory=dict, init=False)
 
     def observation(self, observation):
-        
+
+        assert observation["observation.environment_state"].shape[-1] == 16, "Expected 16 features in environment_state of pusht."
+
         # Add history dimension if not present: ensure shape is [batch_size, history_steps, 16]
         if observation["observation.environment_state"].ndim == 2:
             observation["observation.environment_state"] = observation["observation.environment_state"].unsqueeze(1)  # [batch_size, 16] -> [batch_size, 1, 16]
             squeeze_output = True
-        else:
+        elif observation["observation.environment_state"].ndim == 3:
             squeeze_output = False
+        else:
+            raise ValueError("Expected 2 or 3 dimensions in environment_state of pusht.")
 
 
         keypoints_reshaped = observation["observation.environment_state"].view(
@@ -61,9 +66,17 @@ class PartialGreenTCoverProcessorStep(ObservationProcessorStep):
         )
         inside_rect = inside_x & inside_y
 
-        num_covered = inside_rect.sum(dim=1)
+        num_covered = inside_rect.sum(dim=2)
 
-        sufficient_coverage = (num_covered > self.threshold).any(dim=1).unsqueeze(1).unsqueeze(2)
+        sufficient_coverage = (num_covered >= self.threshold)
+
+        self._metrics = {
+            "partial_green_t_cover_processor/num_covered": num_covered.float().mean().item(),
+            "partial_green_t_cover_processor/ratio": (num_covered.float().mean() / keypoints_reshaped.shape[2]).item(),
+            "partial_green_t_cover_processor/sufficient_coverage": sufficient_coverage.float().mean().item()
+        }
+
+        sufficient_coverage = sufficient_coverage.unsqueeze(2)
 
         observation["observation.environment_state"] = observation["observation.environment_state"] * sufficient_coverage
 
@@ -75,3 +88,7 @@ class PartialGreenTCoverProcessorStep(ObservationProcessorStep):
 
     def transform_features(self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
         return features
+
+    def get_metrics(self):
+        """Returns the current metrics."""
+        return self._metrics

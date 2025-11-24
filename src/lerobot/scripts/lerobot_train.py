@@ -147,8 +147,6 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     # It will automatically detect if running in distributed mode or single-process mode
     # We set step_scheduler_with_optimizer=False to prevent accelerate from adjusting the lr_scheduler steps based on the num_processes
     # We set find_unused_parameters=True to handle models with conditional computation
-    # if __debug__:
-    #     cfg.wandb.enable = False
     gettrace = getattr(sys, "gettrace", None)
     if gettrace():
         print("Debugging in VSCode, disabling wandb.")
@@ -364,6 +362,9 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                 wandb_log_dict = train_tracker.to_dict()
                 if output_dict:
                     wandb_log_dict.update(output_dict)
+                for p in preprocessor:
+                    if hasattr(p, "get_metrics"):
+                        wandb_log_dict.update(p.get_metrics())
                 wandb_logger.log_dict(wandb_log_dict, step)
             train_tracker.reset_averages()
 
@@ -429,6 +430,9 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                 eval_tracker.pc_success = aggregated.pop("pc_success")
                 if wandb_logger:
                     wandb_log_dict = {**eval_tracker.to_dict(), **eval_info}
+                    for p in preprocessor:
+                        if hasattr(p, "get_metrics"):
+                            wandb_log_dict.update(p.get_metrics())
                     wandb_logger.log_dict(wandb_log_dict, step, mode="eval")
                     wandb_logger.log_video(eval_info["overall"]["video_paths"][0], step, mode="eval")
 

@@ -1,4 +1,4 @@
-<<: !include train_diffusion_pusht_visual.yaml
+<<: !include base_diffusion.yaml
 
 job_name: train_diffusion_pusht_partial
 env:
