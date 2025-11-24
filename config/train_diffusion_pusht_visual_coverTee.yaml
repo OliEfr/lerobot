@@ -11,10 +11,6 @@ env:
       type: ACTION
       shape:
         - 2
-    agent_pos:
-      type: STATE
-      shape:
-        - 2
     pixels:
       type: VISUAL
       shape:

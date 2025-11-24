@@ -31,11 +31,12 @@ from .pipeline import ObservationProcessorStep, ProcessorStepRegistry
 class PartialGreenTCoverProcessorStep(ObservationProcessorStep):
     """This processor decides whether to return the environment_state (keypoints of the tee) or zeros depending on some condition."""
 
-    threshold: int = 6
+    threshold: int = 3
     _metrics: dict = field(default_factory=dict, init=False)
 
     def observation(self, observation):
 
+        # environment state (tee keypoints)
         assert observation["observation.environment_state"].shape[-1] == 16, "Expected 16 features in environment_state of pusht."
 
         # Add history dimension if not present: ensure shape is [batch_size, history_steps, 16]
@@ -83,6 +84,36 @@ class PartialGreenTCoverProcessorStep(ObservationProcessorStep):
         # Remove history dimension if it was added
         if squeeze_output:
             observation["observation.environment_state"] = observation["observation.environment_state"].squeeze(1)
+
+
+        # state (agent position)
+        assert observation["observation.state"].shape[-1] == 2, "Expected 2 features in state of pusht."
+
+        # Add history dimension if not present: ensure shape is [batch_size, history_steps, 16]
+        if observation["observation.state"].ndim == 2:
+            observation["observation.state"] = observation["observation.state"].unsqueeze(1)  # [batch_size, 16] -> [batch_size, 1, 16]
+            assert squeeze_output is True, "Inconsistent history dimensions between environment_state and state."
+        elif observation["observation.state"].ndim == 3:
+            assert squeeze_output is False, "Inconsistent history dimensions between environment_state and state."
+        else:
+            raise ValueError("Expected 2 or 3 dimensions in state of pusht.")
+        
+        x_coord = observation["observation.state"][..., 0]
+        y_coord = observation["observation.state"][..., 1]
+
+        inside_x = (x_coord >= COVER_GREEN_T_START_X_STATE) & (
+            x_coord <= COVER_GREEN_T_END_X_STATE
+        )
+        inside_y = (y_coord >= COVER_GREEN_T_START_Y_STATE) & (
+            y_coord <= COVER_GREEN_T_END_Y_STATE
+        )
+        inside_rect = inside_x & inside_y
+        inside_rect = inside_rect.unsqueeze(2)
+
+        observation["observation.state"] = observation["observation.state"] * inside_rect
+
+        if squeeze_output:
+            observation["observation.state"] = observation["observation.state"].squeeze(1)
 
         return observation
 
