@@ -1,5 +1,5 @@
 <<: !include train_diffusion_pusht_keypoints.yaml
-<<: !include envs/pusht_keypoints_coverTee.yaml
+<<: !include envs/pusht_coverTee.yaml
 
 job_name: train_diffusion_pusht_keypoints_coverTee
 dataset:

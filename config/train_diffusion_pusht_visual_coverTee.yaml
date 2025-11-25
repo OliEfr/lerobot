@@ -1,5 +1,5 @@
 <<: !include train_diffusion_pusht_visual.yaml
-<<: !include envs/pusht_visual_coverTee.yaml
+<<: !include envs/pusht_coverTee.yaml
 
 job_name: train_diffusion_pusht_visual_coverTee
 dataset:
