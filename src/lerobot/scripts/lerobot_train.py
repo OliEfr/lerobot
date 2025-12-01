@@ -24,6 +24,7 @@ import torch
 from accelerate import Accelerator
 from termcolor import colored
 from torch.optim import Optimizer
+from torch.utils.data import SubsetRandomSampler
 
 from lerobot.configs import parser
 from lerobot.configs.train import TrainPipelineConfig
@@ -51,6 +52,8 @@ from lerobot.utils.utils import (
     has_method,
     init_logging,
 )
+
+from lerobot.datasets.libero_dataset_tools import analyze_dataset_tasks
 
 
 def update_policy(
@@ -242,7 +245,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             },
         }
 
-    if cfg.policy.partial_green_t_cover_processor:
+    if hasattr(cfg.policy, "partial_green_t_cover_processor") and cfg.policy.partial_green_t_cover_processor:
         assert cfg.env.task == "PushT-v0", "This processor is only compatible with PushT-v0"
         assert "environment_state" in cfg.env.features and "observation.environment_state" in cfg.policy.input_features, "You probably want to use the environment state in your env and policy when using partial_green_t_cover_processor."
     preprocessor, postprocessor = make_pre_post_processors(
@@ -277,9 +280,17 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         logging.info(f"{num_learnable_params=} ({format_big_number(num_learnable_params)})")
         logging.info(f"{num_total_params=} ({format_big_number(num_total_params)})")
 
+    if (
+        "libero" in cfg.dataset.repo_id
+        and hasattr(cfg.policy, "task_to_solve")
+        and cfg.policy.task_to_solve is not None
+    ):
+        libero_stats = analyze_dataset_tasks(dataset, output_dir="libero_dataset_stats")
+
     # create dataloader for offline training
     if hasattr(cfg.policy, "drop_n_last_frames"):
         shuffle = False
+        assert not "libero_stats" in locals(), "still need to handle this case"
         sampler = EpisodeAwareSampler(
             dataset.meta.episodes["dataset_from_index"],
             dataset.meta.episodes["dataset_to_index"],
@@ -289,6 +300,10 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     else:
         shuffle = True
         sampler = None
+        if "libero_stats" in locals():
+            sample_idx_to_use = libero_stats["task_to_indices"][cfg.task_to_solve]
+            sampler = SubsetRandomSampler(sample_idx_to_use)
+            shuffle = False # SubsetRandomSampler shuffles by default already
 
     dataloader = torch.utils.data.DataLoader(
         dataset,
@@ -331,6 +346,88 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
 
     if is_main_process:
         logging.info("Start offline training on a fixed dataset")
+
+    # train rnd
+    if hasattr(cfg.policy, "use_rnd") and cfg.policy.use_rnd:
+        train_len = int(len(dataset) * 0.95)
+        test_len = len(dataset) - train_len
+        train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_len, test_len])
+
+        dataloader_train = torch.utils.data.DataLoader(
+            train_dataset,
+            num_workers=cfg.num_workers,
+            batch_size=cfg.batch_size,
+            shuffle=True and not cfg.dataset.streaming,
+            sampler=None,
+            pin_memory=device.type == "cuda",
+            drop_last=False,
+            prefetch_factor=2 if cfg.num_workers > 0 else None,
+        )
+
+        dataloader_test = torch.utils.data.DataLoader(
+            test_dataset,
+            num_workers=cfg.num_workers,
+            batch_size=cfg.batch_size,
+            shuffle=False,
+            sampler=None,
+            pin_memory=device.type == "cuda",
+            drop_last=False,
+            prefetch_factor=2 if cfg.num_workers > 0 else None,
+        )
+
+        # Early stopping setup
+        best_test_loss = float('inf')
+        patience = 5
+        patience_counter = 0
+
+        for epoch in range(0, 50):
+            epoch_loss_train = 0
+            epoch_loss_test = 0
+
+            # train
+            for batch in dataloader_train:
+                batch = preprocessor(batch)
+                loss = policy.diffusion.rnd.train_on_batch(batch)
+                epoch_loss_train += loss.item()
+            epoch_loss_train /= len(dataloader_train)
+
+            # test
+            for batch in dataloader_test:
+                batch = preprocessor(batch)
+                with torch.no_grad():
+                    loss = policy.diffusion.rnd.compute_loss(batch).mean()
+                epoch_loss_test += loss.item()
+            epoch_loss_test /= len(dataloader_test)
+
+            print(f"[RND] Epoch: {epoch}, Train Loss: {epoch_loss_train}, Test Loss: {epoch_loss_test}")
+            if wandb_logger:
+                wandb_logger.log_dict({"rnd_train_loss": epoch_loss_train, "rnd_test_loss": epoch_loss_test}, epoch, mode="train")
+
+            # Early stopping
+            if epoch_loss_test < best_test_loss:
+                best_test_loss = epoch_loss_test
+                patience_counter = 0
+                print(f"[RND] New best test loss: {best_test_loss:.6f}")
+            elif epoch > 5:
+                patience_counter += 1
+                print(f"[RND] No improvement for {patience_counter} epoch(s)")
+
+            if patience_counter >= patience:
+                print(f"[RND] Early stopping triggered at epoch {epoch}. Best test loss: {best_test_loss:.6f}")
+                break
+
+        # OOD test
+        epoch_loss_ood = 0
+        for batch in dataloader_train:
+            assert preprocessor[0]._registry_name == "partial_green_t_cover_processor", "Preprocessor must be a PartialGreenTCoverProcessorStep."
+            batch = preprocessor[1:](batch)
+            with torch.no_grad():
+                loss = policy.diffusion.rnd.compute_loss(batch).mean()
+            epoch_loss_ood += loss.item()
+        epoch_loss_ood /= len(dataloader_train)
+        print(f"[RND] OOD Loss: {epoch_loss_ood}")
+        if wandb_logger:
+            wandb_logger.log_dict({"rnd_ood_loss": epoch_loss_ood}, epoch, mode="train")
 
     for _ in range(step, cfg.steps):
         start_time = time.perf_counter()

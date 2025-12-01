@@ -32,6 +32,7 @@ import torchvision
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from torch import Tensor, nn
+import torch.optim as optim
 
 from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
 from lerobot.policies.pretrained import PreTrainedPolicy
@@ -183,6 +184,9 @@ class DiffusionModel(nn.Module):
         assert global_cond_dim > 0, "No observation features provided"
 
         self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps)
+        
+        if self.config.use_rnd:
+            self.rnd = RND(config)
 
         self.noise_scheduler = _make_noise_scheduler(
             config.noise_scheduler_type,
@@ -239,8 +243,22 @@ class DiffusionModel(nn.Module):
 
     def _prepare_global_conditioning(self, batch: dict[str, Tensor]) -> Tensor:
         """Encode image features and concatenate them all together along with the state vector."""
+
         batch_size, n_obs_steps = batch[OBS_STATE].shape[:2]
         global_cond_feats = []
+
+        # Do ood checks, and set obs to zero if required
+        if self.config.use_rnd and not self.training: # only during eval
+            with torch.no_grad():
+                ood = self.rnd.compute_loss(batch).mean(dim=1)
+
+            threshold = 0.0003
+            ood_mask = (ood <= threshold).float().view(-1,1,1)
+            print(ood_mask.mean())
+
+            for f in self.rnd.rnd_features:
+                batch[f] = batch[f] * ood_mask
+
         if self.config.robot_state_feature:
             global_cond_feats.append(batch[OBS_STATE])
         # Extract image features.
@@ -369,6 +387,56 @@ class DiffusionModel(nn.Module):
 
         return loss.mean()
 
+class RND(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+
+        self.rnd_features = ['observation.state', 'observation.environment_state']
+
+        self.target_nn = nn.Sequential(
+            nn.Linear(in_features=2*18, out_features=512),
+            nn.LeakyReLU(),
+            nn.Linear(in_features=512, out_features=512),
+            nn.LeakyReLU(),
+            nn.Linear(in_features=512, out_features=512),
+        )
+        self.predictor_nn = nn.Sequential(
+            nn.Linear(in_features=2*18, out_features=512),
+            nn.LeakyReLU(),
+            nn.Linear(in_features=512, out_features=512),
+            nn.LeakyReLU(),
+            nn.Linear(in_features=512, out_features=512),
+            nn.LeakyReLU(),
+            nn.Linear(in_features=512, out_features=512)
+        )
+        self.target_nn.eval()
+        self.predictor_nn.train()
+        for param in self.target_nn.parameters():
+            param.requires_grad = False
+
+        self.optimizer = optim.Adam(self.predictor_nn.parameters(), lr=1e-3)
+        self.criterion = nn.MSELoss(reduction='none')
+
+    def train_on_batch(self, batch: dict[str, Tensor]) -> Tensor:
+        loss = self.compute_loss(batch).mean()
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        return loss
+
+    def compute_loss(self, batch: dict[str, Tensor]) -> Tensor: 
+        tensors = [batch[k] for k in self.rnd_features]
+        nn_input = torch.cat(tensors, dim=-1).flatten(start_dim=1)
+        target = self.target_nn(nn_input)
+        pred = self.predictor_nn(nn_input)
+        loss = self.criterion(pred, target)
+        return loss
+
+
+
+
 
 class SpatialSoftmax(nn.Module):
     """
@@ -440,7 +508,12 @@ class SpatialSoftmax(nn.Module):
 
         return feature_keypoints
 
-
+def freeze_image_encoder(backbone: nn.Module):
+    """Freeze all parameters in the encoder"""
+    for param in backbone.parameters():
+        param.requires_grad = False
+        
+        
 class DiffusionRgbEncoder(nn.Module):
     """Encodes an RGB image into a 1D feature vector.
 
@@ -468,10 +541,18 @@ class DiffusionRgbEncoder(nn.Module):
         # Note: This assumes that the layer4 feature map is children()[-3]
         # TODO(alexander-soare): Use a safer alternative.
         self.backbone = nn.Sequential(*(list(backbone_model.children())[:-2]))
+
+        if config.freeze_image_encoder:
+            freeze_image_encoder(self.backbone)
+
         if config.use_group_norm:
             if config.pretrained_backbone_weights:
                 raise ValueError(
                     "You can't replace BatchNorm in a pretrained model without ruining the weights!"
+                )
+            if config.freeze_image_encoder:
+                raise ValueError(
+                    "You can't replace BatchNorm in a frozen model without ruining the weights!"
                 )
             self.backbone = _replace_submodules(
                 root_module=self.backbone,

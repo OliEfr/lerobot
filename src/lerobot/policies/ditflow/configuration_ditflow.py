@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-# Copyright 2024 Columbia Artificial Intelligence, Robotics Lab,
+# Copyright 2025 Nur Muhammad Mahi Shafiullah,
 # and The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,16 +16,17 @@
 # limitations under the License.
 from dataclasses import dataclass, field
 
-from lerobot.configs.policies import PreTrainedConfig
-from lerobot.configs.types import NormalizationMode
 from lerobot.optim.optimizers import AdamConfig
 from lerobot.optim.schedulers import DiffuserSchedulerConfig
+from lerobot.configs.policies import PreTrainedConfig
+from lerobot.configs.types import NormalizationMode
+from lerobot.utils.constants import ACTION
 
 
-@PreTrainedConfig.register_subclass("diffusion")
+@PreTrainedConfig.register_subclass("ditflow")
 @dataclass
-class DiffusionConfig(PreTrainedConfig):
-    """Configuration class for DiffusionPolicy.
+class DiTFlowConfig(PreTrainedConfig):
+    """Configuration class for DiTFlowPolicy.
 
     Defaults are configured for training with PushT providing proprioceptive and single camera observations.
 
@@ -45,9 +46,9 @@ class DiffusionConfig(PreTrainedConfig):
     Args:
         n_obs_steps: Number of environment steps worth of observations to pass to the policy (takes the
             current step and additional steps going back).
-        horizon: Diffusion model action prediction size as detailed in `DiffusionPolicy.select_action`.
+        horizon: DiT-flow model action prediction size as detailed in `DiTFlowPolicy.select_action`.
         n_action_steps: The number of action steps to run in the environment for one invocation of the policy.
-            See `DiffusionPolicy.select_action` for more details.
+            See `DiTFlowPolicy.select_action` for more details.
         input_shapes: A dictionary defining the shapes of the input data for the policy. The key represents
             the input data name, and the value is a list indicating the dimensions of the corresponding data.
             For example, "observation.image" refers to an input from a camera with dimensions [3, 96, 96],
@@ -68,38 +69,28 @@ class DiffusionConfig(PreTrainedConfig):
             within the image size. If None, no cropping is done.
         crop_is_random: Whether the crop should be random at training time (it's always a center crop in eval
             mode).
-        pretrained_backbone_weights: Pretrained weights from torchvision to initialize the backbone.
+        pretrained_backbone_weights: Pretrained weights from torchvision to initalize the backbone.
             `None` means no pretrained weights.
         use_group_norm: Whether to replace batch normalization with group normalization in the backbone.
             The group sizes are set to be about 16 (to be precise, feature_dim // 16).
         spatial_softmax_num_keypoints: Number of keypoints for SpatialSoftmax.
         use_separate_rgb_encoders_per_camera: Whether to use a separate RGB encoder for each camera view.
-        down_dims: Feature dimension for each stage of temporal downsampling in the diffusion modeling Unet.
-            You may provide a variable number of dimensions, therefore also controlling the degree of
-            downsampling.
-        kernel_size: The convolutional kernel size of the diffusion modeling Unet.
-        n_groups: Number of groups used in the group norm of the Unet's convolutional blocks.
-        diffusion_step_embed_dim: The Unet is conditioned on the diffusion timestep via a small non-linear
-            network. This is the output dimension of that network, i.e., the embedding dimension.
-        use_film_scale_modulation: FiLM (https://huggingface.co/papers/1709.07871) is used for the Unet conditioning.
-            Bias modulation is used be default, while this parameter indicates whether to also use scale
-            modulation.
-        noise_scheduler_type: Name of the noise scheduler to use. Supported options: ["DDPM", "DDIM"].
-        num_train_timesteps: Number of diffusion steps for the forward diffusion schedule.
-        beta_schedule: Name of the diffusion beta schedule as per DDPMScheduler from Hugging Face diffusers.
-        beta_start: Beta value for the first forward-diffusion step.
-        beta_end: Beta value for the last forward-diffusion step.
-        prediction_type: The type of prediction that the diffusion modeling Unet makes. Choose from "epsilon"
-            or "sample". These have equivalent outcomes from a latent variable modeling perspective, but
-            "epsilon" has been shown to work better in many deep neural network settings.
+
+        frequency_embedding_dim: The embedding dimension for the time value embedding in the flow model.
+        num_blocks: The number of transformer blocks in the DiT flow model.
+        hidden_dim: The hidden dimension for the transformer blocks in the DiT flow model.
+        num_heads: The number of attention heads in the transformer blocks.
+        dropout: The dropout rate used inside the transformer blocks.
+        dim_feedforward: The expanded feedforward dimension in the MLPs used in the transformer block.
+        activation: The activation function used in the transformer blocks.
         clip_sample: Whether to clip the sample to [-`clip_sample_range`, +`clip_sample_range`] for each
             denoising step at inference time. WARNING: you will need to make sure your action-space is
             normalized to fit within this range.
         clip_sample_range: The magnitude of the clipping range as described above.
         num_inference_steps: Number of reverse diffusion steps to use at inference time (steps are evenly
-            spaced). If not provided, this defaults to be the same as `num_train_timesteps`.
+            spaced).
         do_mask_loss_for_padding: Whether to mask the loss when there are copy-padded actions. See
-            `LeRobotDataset` and `load_previous_and_future_frames` for more information. Note, this defaults
+            `LeRobotDataset` and `load_previous_and_future_frames` for mor information. Note, this defaults
             to False as the original Diffusion Policy implementation does the same.
     """
 
@@ -108,12 +99,13 @@ class DiffusionConfig(PreTrainedConfig):
     horizon: int = 16
     n_action_steps: int = 8
 
+    use_proprioceptive: bool = True
+
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
             "VISUAL": NormalizationMode.MEAN_STD,
             "STATE": NormalizationMode.MIN_MAX,
             "ACTION": NormalizationMode.MIN_MAX,
-            "ENV": NormalizationMode.MIN_MAX,
         }
     )
 
@@ -126,29 +118,27 @@ class DiffusionConfig(PreTrainedConfig):
     vision_backbone: str = "resnet18"
     crop_shape: tuple[int, int] | None = (84, 84)
     crop_is_random: bool = True
-    pretrained_backbone_weights: str | None = None # "IMAGENET1K_V1"
-    freeze_image_encoder: bool = False # TODO Test
+    pretrained_backbone_weights: str | None = None
     use_group_norm: bool = True
     spatial_softmax_num_keypoints: int = 32
-    use_separate_rgb_encoder_per_camera: bool = False
-    # Unet.
-    down_dims: tuple[int, ...] = (512, 1024, 2048)
-    kernel_size: int = 5
-    n_groups: int = 8
-    diffusion_step_embed_dim: int = 128
-    use_film_scale_modulation: bool = True
+    use_separate_rgb_encoder_per_camera: bool = True
+
+    # Diffusion Transformer (DiT) parameters.
+    frequency_embedding_dim: int = 256
+    hidden_dim: int = 1024
+    num_blocks: int = 12
+    num_heads: int = 16
+    dropout: float = 0.1
+    dim_feedforward: int = 4096
+    activation: str = "gelu"
+
     # Noise scheduler.
-    noise_scheduler_type: str = "DDPM"
-    num_train_timesteps: int = 100
-    beta_schedule: str = "squaredcos_cap_v2"
-    beta_start: float = 0.0001
-    beta_end: float = 0.02
-    prediction_type: str = "epsilon"
+    training_noise_sampling: str = "uniform"  # "uniform" or "beta", from pi0 https://www.physicalintelligence.company/download/pi0.pdf
     clip_sample: bool = True
     clip_sample_range: float = 1.0
 
     # Inference
-    num_inference_steps: int | None = None
+    num_inference_steps: int | None = 100
 
     # Loss computation
     do_mask_loss_for_padding: bool = False
@@ -160,12 +150,15 @@ class DiffusionConfig(PreTrainedConfig):
     optimizer_weight_decay: float = 1e-6
     scheduler_name: str = "cosine"
     scheduler_warmup_steps: int = 500
-    
-    # Processors
-    partial_green_t_cover_processor: bool = False
-    
-    # RND
+
+    features_to_exclude: list[str] = field(default_factory=lambda: [])
+
+    freeze_image_encoder: bool = False
     use_rnd: bool = False
+    partial_green_t_cover_processor: bool = False
+
+    # NOTE: if you set features to include, features_to_exclude is ignored.
+    features_to_include: list[str] | None = None
 
     def __post_init__(self):
         super().__post_init__()
@@ -176,25 +169,9 @@ class DiffusionConfig(PreTrainedConfig):
                 f"`vision_backbone` must be one of the ResNet variants. Got {self.vision_backbone}."
             )
 
-        supported_prediction_types = ["epsilon", "sample"]
-        if self.prediction_type not in supported_prediction_types:
+        if self.training_noise_sampling not in ("uniform", "beta"):
             raise ValueError(
-                f"`prediction_type` must be one of {supported_prediction_types}. Got {self.prediction_type}."
-            )
-        supported_noise_schedulers = ["DDPM", "DDIM"]
-        if self.noise_scheduler_type not in supported_noise_schedulers:
-            raise ValueError(
-                f"`noise_scheduler_type` must be one of {supported_noise_schedulers}. "
-                f"Got {self.noise_scheduler_type}."
-            )
-
-        # Check that the horizon size and U-Net downsampling is compatible.
-        # U-Net downsamples by 2 with each stage.
-        downsampling_factor = 2 ** len(self.down_dims)
-        if self.horizon % downsampling_factor != 0:
-            raise ValueError(
-                "The horizon should be an integer multiple of the downsampling factor (which is determined "
-                f"by `len(down_dims)`). Got {self.horizon=} and {self.down_dims=}"
+                f"`training_noise_sampling` must be either 'uniform' or 'beta'. Got {self.training_noise_sampling}."
             )
 
     def get_optimizer_preset(self) -> AdamConfig:
@@ -212,12 +189,54 @@ class DiffusionConfig(PreTrainedConfig):
         )
 
     def validate_features(self) -> None:
-        if len(self.image_features) == 0 and self.env_state_feature is None:
-            raise ValueError("You must provide at least one image or the environment state among the inputs.")
+        if self.features_to_include is not None:
+            assert ACTION in self.features_to_include, (
+                f"`{ACTION}` must be included in `features_to_include`. Got {self.features_to_include}."
+            )
+            for feature in self.features_to_include:
+                if (
+                    feature not in self.input_features
+                    and feature not in self.output_features
+                ):
+                    raise ValueError(
+                        f"Feature '{feature}' in `features_to_include` not found in input or output features."
+                        f" Available input features: {list(self.input_features.keys())}. "
+                        f"Available output features: {list(self.output_features.keys())}."
+                    )
+
+            # Create features_to_exclude from features_to_include
+            all_features = list(self.input_features.keys()) + list(
+                self.output_features.keys()
+            )
+            self.features_to_exclude = [
+                feature
+                for feature in all_features
+                if feature not in self.features_to_include
+            ]
+
+        for feature_to_exclude in self.features_to_exclude:
+            if feature_to_exclude in self.input_features:
+                del self.input_features[feature_to_exclude]
+            elif feature_to_exclude in self.output_features:
+                del self.output_features[feature_to_exclude]
+            else:
+                raise ValueError(
+                    f"Feature '{feature_to_exclude}' not found in input or output features."
+                    f" Available input features: {list(self.input_features.keys())}. "
+                    f"Available output features: {list(self.output_features.keys())}."
+                )
+
+        # if len(self.image_features) == 0 and self.env_state_feature is None:
+        #     raise ValueError(
+        #         "You must provide at least one image or the environment state among the inputs."
+        #     )
 
         if self.crop_shape is not None:
             for key, image_ft in self.image_features.items():
-                if self.crop_shape[0] > image_ft.shape[1] or self.crop_shape[1] > image_ft.shape[2]:
+                if (
+                    self.crop_shape[0] > image_ft.shape[1]
+                    or self.crop_shape[1] > image_ft.shape[2]
+                ):
                     raise ValueError(
                         f"`crop_shape` should fit within the images shapes. Got {self.crop_shape} "
                         f"for `crop_shape` and {image_ft.shape} for "

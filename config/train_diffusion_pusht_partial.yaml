@@ -30,4 +30,6 @@ policy:
         - 3
         - 96
         - 96
+  use_separate_rgb_encoder_per_camera: true
+  use_rnd: true
 

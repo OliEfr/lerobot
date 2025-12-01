@@ -177,3 +177,5 @@ outputs/
 *.urdf
 *.xml
 *.part
+
+libero_dataset_stats

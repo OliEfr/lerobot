@@ -67,6 +67,8 @@ class TrainPipelineConfig(HubMixin):
     checkpoint_path: Path | None = field(init=False, default=None)
     # Rename map for the observation to override the image and state keys
     rename_map: dict[str, str] = field(default_factory=dict)
+    
+    task_to_solve: str | None = None # a task description for libero; only supported for libero
 
     def validate(self) -> None:
         # HACK: We parse again the cli args here to get the pretrained paths if there was some.
@@ -129,6 +131,9 @@ class TrainPipelineConfig(HubMixin):
             raise ValueError(
                 "'policy.repo_id' argument missing. Please specify it to push the model to the hub."
             )
+            
+        if self.task_to_solve is not None:
+            assert "libero" in self.dataset.repo_id, "task_to_solve is only supported for libero"
 
     @classmethod
     def __get_path_fields__(cls) -> list[str]:

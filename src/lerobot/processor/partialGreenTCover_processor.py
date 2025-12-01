@@ -31,7 +31,7 @@ from .pipeline import ObservationProcessorStep, ProcessorStepRegistry
 class PartialGreenTCoverProcessorStep(ObservationProcessorStep):
     """This processor decides whether to return the environment_state (keypoints of the tee) or zeros depending on some condition."""
 
-    threshold: int = 3
+    threshold: int = 4
     _metrics: dict = field(default_factory=dict, init=False)
 
     def observation(self, observation):
@@ -47,7 +47,6 @@ class PartialGreenTCoverProcessorStep(ObservationProcessorStep):
             squeeze_output = False
         else:
             raise ValueError("Expected 2 or 3 dimensions in environment_state of pusht.")
-
 
         keypoints_reshaped = observation["observation.environment_state"].view(
             observation["observation.environment_state"].shape[0],
@@ -67,24 +66,37 @@ class PartialGreenTCoverProcessorStep(ObservationProcessorStep):
         )
         inside_rect = inside_x & inside_y
 
+        # Mask all keypoints that are not in rectangle
+        # inside_rect = (
+        #     inside_rect.unsqueeze(-1)
+        #     .expand(-1, -1, -1, 2)
+        #     .reshape(*observation["observation.environment_state"].shape)
+        # )
+        # observation["observation.environment_state"] = (
+        #     observation["observation.environment_state"] * inside_rect
+        # )
+        # self._metrics = {
+        #     "partial_green_t_cover_processor/inside_rect_mean": inside_rect.float()
+        #     .mean()
+        #     .detach()
+        #     .clone()
+        #     .item(),
+        # }
+
+        # mask all if not a certain number of keypoints is under the rectangle
         num_covered = inside_rect.sum(dim=2)
-
         sufficient_coverage = (num_covered >= self.threshold)
-
         self._metrics = {
             "partial_green_t_cover_processor/num_covered_mean": num_covered.float().mean().detach().clone().item(),
             "partial_green_t_cover_processor/num_covered_ratio": (num_covered.float().mean() / keypoints_reshaped.shape[2]).detach().clone().item(),
             "partial_green_t_cover_processor/sufficient_coverage_ratio": sufficient_coverage.float().mean().detach().clone().item()
         }
-
         sufficient_coverage = sufficient_coverage.unsqueeze(2)
-
         observation["observation.environment_state"] = observation["observation.environment_state"] * sufficient_coverage
 
         # Remove history dimension if it was added
         if squeeze_output:
             observation["observation.environment_state"] = observation["observation.environment_state"].squeeze(1)
-
 
         # state (agent position)
         assert observation["observation.state"].shape[-1] == 2, "Expected 2 features in state of pusht."
@@ -97,7 +109,7 @@ class PartialGreenTCoverProcessorStep(ObservationProcessorStep):
             assert squeeze_output is False, "Inconsistent history dimensions between environment_state and state."
         else:
             raise ValueError("Expected 2 or 3 dimensions in state of pusht.")
-        
+
         x_coord = observation["observation.state"][..., 0]
         y_coord = observation["observation.state"][..., 1]
 
