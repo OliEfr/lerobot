@@ -1,0 +1,1 @@
+python src/lerobot/scripts/lerobot_dataset_viz.py --repo-id pusht_teleop --root data/pusht_teleop --episode-index 0

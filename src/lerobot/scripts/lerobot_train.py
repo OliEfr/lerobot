@@ -282,8 +282,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
 
     if (
         "libero" in cfg.dataset.repo_id
-        and hasattr(cfg.policy, "task_to_solve")
-        and cfg.policy.task_to_solve is not None
+        and hasattr(cfg, "task_to_solve")
+        and cfg.task_to_solve is not None
     ):
         libero_stats = analyze_dataset_tasks(dataset, output_dir="libero_dataset_stats")
 
@@ -337,7 +337,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     effective_batch_size = cfg.batch_size * accelerator.num_processes
     train_tracker = MetricsTracker(
         effective_batch_size,
-        dataset.num_frames,
+        dataset.num_frames, # NOTE this is not correct incase sampler is used
         dataset.num_episodes,
         train_metrics,
         initial_step=step,
@@ -516,7 +516,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                 }
                 eval_tracker = MetricsTracker(
                     cfg.batch_size,
-                    dataset.num_frames,
+                    dataset.num_frames, # NOTE this is not correct incase sampler is used
                     dataset.num_episodes,
                     eval_metrics,
                     initial_step=step,

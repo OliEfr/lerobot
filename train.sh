@@ -4,23 +4,13 @@
 # lerobot-train --config_path=config/train_diffusion_pusht_visual.yaml
 
 
-
-lerobot-train \
-  --policy.type=smolvla \
-  --policy.load_vlm_weights=true \
-  --policy.scheduler_decay_steps=200000 \
-  --policy.push_to_hub=false \
-  --dataset.repo_id=HuggingFaceVLA/libero \
-  --env.type=libero \
-  --env.task=libero_10 \
-  --steps=200000 \
-  --batch_size=32 \
-  --eval.batch_size=1 \
-  --eval.n_episodes=10 \
-  --eval_freq=10000 \
-  --wandb.enable=true \
-  --wandb.project=policies_lerobot_smolvla \
+# ablate different cameras
+lerobot-train --config_path=config/smolvla/smolvla.yaml
+lerobot-train --config_path=config/smolvla/smolvla.yaml \
   --policy.input_features='{"observation.images.image": {"type": "VISUAL", "shape": [3,256,256]}}'
+lerobot-train --config_path=config/smolvla/smolvla.yaml \
+  --policy.input_features='{"observation.images.image2": {"type": "VISUAL", "shape": [3,256,256]}}'
+
 
 # python src/lerobot/scripts/lerobot_train.py \
 #     --dataset.repo_id=HuggingFaceVLA/libero \

@@ -1,0 +1,23 @@
+job_name: lerobot_train_smolvla
+steps: 200_000
+save_freq: 200_000
+eval_freq: 10_000
+batch_size: 32
+eval:
+  batch_size: 1
+  n_episodes: 10
+policy:
+  type: smolvla
+  load_vlm_weights: true
+  scheduler_decay_steps: 200_000
+  push_to_hub: false
+dataset:
+  repo_id: HuggingFaceVLA/libero
+env:
+  type: libero
+  task: libero_10
+  task_ids: [4]
+wandb:
+  enable: true
+  project: policies_lerobot_smolvla
+task_to_solve: 'put the white mug on the left plate and put the yellow and white mug on the right plate'

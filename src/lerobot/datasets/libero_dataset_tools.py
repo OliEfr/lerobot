@@ -53,7 +53,7 @@ def analyze_dataset_tasks(dataset, output_dir="dataset_task_analysis"):
 
     # Print results
     print("\n" + "=" * 80)
-    print("ANALYSIS RESULTS")
+    print("CONDUCTED LIBERO DATASET ANALYSIS")
     print("=" * 80)
     print(f"\nTotal unique tasks found: {len(task_to_indices)}")
     print(
@@ -63,15 +63,6 @@ def analyze_dataset_tasks(dataset, output_dir="dataset_task_analysis"):
     sorted_tasks = sorted(
         task_to_indices.items(), key=lambda x: len(x[1]), reverse=True
     )
-
-    for task, indices in sorted_tasks:
-        num_samples = len(indices)
-        num_episodes = task_to_episode_counts[task]
-        print(f"Task: {task}")
-        print(f"  - Samples: {num_samples}")
-        print(f"  - Episodes: {num_episodes}")
-        print(f"  - Samples per episode (avg): {num_samples / num_episodes:.2f}")
-        print()
 
     results = {
         "task_to_indices": task_to_indices,

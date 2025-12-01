@@ -131,9 +131,14 @@ class TrainPipelineConfig(HubMixin):
             raise ValueError(
                 "'policy.repo_id' argument missing. Please specify it to push the model to the hub."
             )
-            
-        if self.task_to_solve is not None:
+
+        if hasattr(self, "task_to_solve") and self.task_to_solve is not None:
             assert "libero" in self.dataset.repo_id, "task_to_solve is only supported for libero"
+            assert len(self.env.task_ids) > 0, "You should specify the envs that you want to solve also in the eval env task_ids."
+
+        if hasattr(self.env, "task_ids") and self.env.task_ids is not None:
+            assert "libero" in self.dataset.repo_id, "task_ids is only supported for libero"
+            assert self.task_to_solve is not None, "You probably also only want to train on a specific task."
 
     @classmethod
     def __get_path_fields__(cls) -> list[str]:
