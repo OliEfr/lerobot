@@ -5,11 +5,14 @@
 
 
 # ablate different cameras
-lerobot-train --config_path=config/smolvla/smolvla.yaml
-lerobot-train --config_path=config/smolvla/smolvla.yaml \
-  --policy.input_features='{"observation.images.image": {"type": "VISUAL", "shape": [3,256,256]}}'
-lerobot-train --config_path=config/smolvla/smolvla.yaml \
-  --policy.input_features='{"observation.images.image2": {"type": "VISUAL", "shape": [3,256,256]}}'
+# lerobot-train --config_path=config/smolvla/smolvla.yaml
+# lerobot-train --config_path=config/smolvla/smolvla.yaml \
+#   --policy.input_features='{"observation.images.image": {"type": "VISUAL", "shape": [3,256,256]}}'
+# lerobot-train --config_path=config/smolvla/smolvla.yaml \
+#   --policy.input_features='{"observation.images.image2": {"type": "VISUAL", "shape": [3,256,256]}}'
+
+lerobot-train --config_path=config/train_diffusion_pusht_fine.yaml
+lerobot-train --config_path=config/train_diffusion_pusht_coarse.yaml
 
 
 # python src/lerobot/scripts/lerobot_train.py \

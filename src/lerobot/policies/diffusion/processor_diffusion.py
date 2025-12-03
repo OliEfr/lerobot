@@ -28,6 +28,7 @@ from lerobot.processor import (
     RenameObservationsProcessorStep,
     UnnormalizerProcessorStep,
     PartialGreenTCoverProcessorStep,
+    AutoImageResizeProcessorStep,
 )
 from lerobot.processor.converters import policy_action_to_transition, transition_to_policy_action
 from lerobot.utils.constants import POLICY_POSTPROCESSOR_DEFAULT_NAME, POLICY_PREPROCESSOR_DEFAULT_NAME
@@ -68,6 +69,7 @@ def make_diffusion_pre_post_processors(
     if config.partial_green_t_cover_processor:
         input_steps.append(PartialGreenTCoverProcessorStep())
 
+    input_steps.append(AutoImageResizeProcessorStep(input_features=config.input_features))
     input_steps.append(RenameObservationsProcessorStep(rename_map={}))
     input_steps.append(AddBatchDimensionProcessorStep())
     input_steps.append(DeviceProcessorStep(device=config.device))

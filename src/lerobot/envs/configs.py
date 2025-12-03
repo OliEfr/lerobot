@@ -126,6 +126,7 @@ class PushtEnv(EnvConfig):
     )
     gaussian_blur: dict[str, Union[int, List[int]]] | None = None
     CoverGreenT: bool | None = None
+    coarsity: str | None = None
 
     def __post_init__(self):
         if self.obs_type == "pixels_agent_pos":
@@ -150,6 +151,7 @@ class PushtEnv(EnvConfig):
             "max_episode_steps": self.episode_length,
             "gaussian_blur": self.gaussian_blur,
             "CoverGreenT": self.CoverGreenT,
+            "coarsity": self.coarsity,
         }
 
 

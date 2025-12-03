@@ -89,9 +89,12 @@ class PushTTeleopRecorder:
             import gym_pusht
             self.env = gym.make(
                 "gym_pusht/PushT-v0",
+                obs_type="environment_state_agent_pos_pixels",
                 render_mode="rgb_array",
                 visualization_width=512,
                 visualization_height=512,
+                observation_width=512,
+                observation_height=512,
                 coarsity=self.coarsity,
             )
         except ImportError:
@@ -136,11 +139,21 @@ class PushTTeleopRecorder:
                     "names": ["channel", "height", "width"],
                 },
                 "observation.state": {
-                    "dtype": "float32", 
+                    "dtype": "float32",
                     "shape": (2,),
                     "names": ["x", "y"],
                 },
                 "action": {
+                    "dtype": "float32",
+                    "shape": (2,),
+                    "names": ["x", "y"],
+                },
+                "observation.environment_state": {
+                    "dtype": "float32",
+                    "shape": (16,),
+                    "names": [str(i) for i in range(16)],
+                },
+                "observation.block_pos": {
                     "dtype": "float32",
                     "shape": (2,),
                     "names": ["x", "y"],
@@ -282,7 +295,9 @@ class PushTTeleopRecorder:
             max_reward = max(max_reward, reward)
 
             # Render
-            img = self.env.render()
+            _ = self.env.render()
+
+            img = obs["pixels"]
 
             # Initialize video writer on first frame
             if self.save_videos and video_writer is None:
@@ -295,11 +310,20 @@ class PushTTeleopRecorder:
 
             # Prepare frame for dataset
             assert img.shape == (512, 512, 3), f"Image shape is {img.shape}, expected (512, 512, 3)"
-            img_resized = np.array(Image.fromarray(img)).transpose(2, 0, 1)
 
             frame = {
-                "observation.image": torch.from_numpy(img_resized),
-                "observation.state": torch.from_numpy(obs[:2].astype(np.float32)),
+                "observation.environment_state": torch.from_numpy(
+                    obs["environment_state"].astype(np.float32)
+                ),
+                "observation.block_pos": torch.from_numpy(
+                    obs["block_pos"].astype(np.float32)
+                ),
+                "observation.image": torch.from_numpy(
+                    np.array(Image.fromarray(img)).transpose(2, 0, 1)
+                ),
+                "observation.state": torch.from_numpy(
+                    obs["agent_pos"].astype(np.float32)
+                ),
                 "action": torch.from_numpy(action.astype(np.float32)),
                 "task": self.task_description,
             }
@@ -405,11 +429,11 @@ class PushTTeleopRecorder:
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Record PushT teleoperation episodes with mouse control')
-    parser.add_argument('--episodes', type=int, default=100, help='Number of episodes to record')
+    parser.add_argument('--episodes', type=int, default=2, help='Number of episodes to record')
     parser.add_argument('--fps', type=int, default=10, help='Frames per second')
     parser.add_argument('--no-video', action='store_true', help='Disable video recording')
     parser.add_argument('--coarsity', type=str, default=None, help='Coarsity of PushT environment')
-    parser.add_argument('--dir_prefix', type=str, default="", help='Prefix for directory name')
+    parser.add_argument('--dir_prefix', type=str, default="TEST", help='Prefix for directory name')
     args = parser.parse_args()
     
     
