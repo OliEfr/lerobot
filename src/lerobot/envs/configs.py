@@ -127,7 +127,7 @@ class PushtEnv(EnvConfig):
     gaussian_blur: dict[str, Union[int, List[int]]] | None = None
     CoverGreenT: bool | None = None
     coarsity: str | None = None
-    action_type: str
+    action_type: str = "relative"
 
     def __post_init__(self):
         if self.obs_type == "pixels_agent_pos":
@@ -153,6 +153,7 @@ class PushtEnv(EnvConfig):
             "gaussian_blur": self.gaussian_blur,
             "CoverGreenT": self.CoverGreenT,
             "coarsity": self.coarsity,
+            "action_type": self.action_type
         }
 
 
