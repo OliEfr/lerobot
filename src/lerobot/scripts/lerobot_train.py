@@ -497,7 +497,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                         postprocessor=postprocessor,
                         n_episodes=cfg.eval.n_episodes,
                         videos_dir=cfg.output_dir / "eval" / f"videos_step_{step_id}",
-                        max_episodes_rendered=4,
+                        max_episodes_rendered=cfg.eval.max_episodes_rendered,
                         start_seed=cfg.seed,
                         max_parallel_tasks=cfg.env.max_parallel_tasks,
                     )
@@ -531,7 +531,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                         if hasattr(p, "get_metrics"):
                             wandb_log_dict.update(p.get_metrics())
                     wandb_logger.log_dict(wandb_log_dict, step, mode="eval")
-                    wandb_logger.log_video(eval_info["overall"]["video_paths"][0], step, mode="eval")
+                    if cfg.eval.max_episodes_rendered > 0:
+                        wandb_logger.log_video(eval_info["overall"]["video_paths"][0], step, mode="eval")
 
             accelerator.wait_for_everyone()
 

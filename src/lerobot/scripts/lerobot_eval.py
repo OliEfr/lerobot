@@ -247,6 +247,7 @@ def eval_policy(
     videos_dir: Path | None = None,
     return_episode_data: bool = False,
     start_seed: int | None = None,
+    only_render_failures: bool = False
 ) -> dict:
     """
     Args:
@@ -369,11 +370,19 @@ def eval_policy(
         # Maybe render video for visualization.
         if max_episodes_rendered > 0 and len(ep_frames) > 0:
             batch_stacked_frames = np.stack(ep_frames, axis=1)  # (b, t, *)
-            for stacked_frames, done_index in zip(
+            for i, (stacked_frames, done_index) in enumerate(zip(
                 batch_stacked_frames, done_indices.flatten().tolist(), strict=False
-            ):
+            )):
                 if n_episodes_rendered >= max_episodes_rendered:
                     break
+                if only_render_failures:
+                    # skip saving if episode was successful -> only save videos of failed episodes
+                    if 
+                    if rollout_data["success"][i][done_index]:
+                        # just a check that I understood the code correctly
+                        assert batch_successes[i], "This should not be triggered. I most likely misunderstood the code"
+                        continue
+                    assert not batch_successes[i], "This should not be triggered. I most likely misunderstood the code"
 
                 videos_dir.mkdir(parents=True, exist_ok=True)
                 video_path = videos_dir / f"eval_episode_{n_episodes_rendered}.mp4"
@@ -383,6 +392,8 @@ def eval_policy(
                     args=(
                         str(video_path),
                         stacked_frames[: done_index + 1],  # + 1 to capture the last observation
+                        # Below renders only last frame
+                        # stacked_frames[done_index: done_index + 1],  # only save last frame - its enough to investigate failure case
                         env.unwrapped.metadata["render_fps"],
                     ),
                 )
@@ -525,10 +536,11 @@ def eval_main(cfg: EvalPipelineConfig):
             preprocessor=preprocessor,
             postprocessor=postprocessor,
             n_episodes=cfg.eval.n_episodes,
-            max_episodes_rendered=10,
+            max_episodes_rendered=cfg.eval.max_episodes_rendered,
             videos_dir=Path(cfg.output_dir) / "videos",
             start_seed=cfg.seed,
             max_parallel_tasks=cfg.env.max_parallel_tasks,
+            only_render_failures=cfg.eval.only_render_failures
         )
         print("Overall Aggregated Metrics:")
         print(info["overall"])
@@ -569,6 +581,7 @@ def eval_one(
     videos_dir: Path | None,
     return_episode_data: bool,
     start_seed: int | None,
+    only_render_failures: bool = False
 ) -> TaskMetrics:
     """Evaluates one task_id of one suite using the provided vec env."""
 
@@ -584,6 +597,7 @@ def eval_one(
         videos_dir=task_videos_dir,
         return_episode_data=return_episode_data,
         start_seed=start_seed,
+        only_render_failures=only_render_failures
     )
 
     per_episode = task_result["per_episode"]
@@ -608,6 +622,7 @@ def run_one(
     videos_dir: Path | None,
     return_episode_data: bool,
     start_seed: int | None,
+    only_render_failures: bool = False
 ):
     """
     Run eval_one for a single (task_group, task_id, env).
@@ -630,6 +645,7 @@ def run_one(
         videos_dir=task_videos_dir,
         return_episode_data=return_episode_data,
         start_seed=start_seed,
+        only_render_failures=only_render_failures
     )
     # ensure we always provide video_paths key to simplify accumulation
     if max_episodes_rendered > 0:
@@ -649,6 +665,7 @@ def eval_policy_all(
     return_episode_data: bool = False,
     start_seed: int | None = None,
     max_parallel_tasks: int = 1,
+    only_render_failures: bool = False
 ) -> dict:
     """
     Evaluate a nested `envs` dict: {task_group: {task_id: vec_env}}.
@@ -702,6 +719,7 @@ def eval_policy_all(
         videos_dir=videos_dir,
         return_episode_data=return_episode_data,
         start_seed=start_seed,
+        only_render_failures=only_render_failures
     )
 
     if max_parallel_tasks <= 1:

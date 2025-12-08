@@ -553,6 +553,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         download_videos: bool = True,
         video_backend: str | None = None,
         batch_encoding_size: int = 1,
+        drop_columns: list[str] | None = None,
     ):
         """
         2 modes are available for instantiating this class, depending on 2 different use cases:
@@ -679,6 +680,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self.batch_encoding_size = batch_encoding_size
         self.episodes_since_last_encoding = 0
 
+        self.drop_columns = drop_columns
+
         # Unused attributes
         self.image_writer = None
         self.episode_buffer = None
@@ -711,6 +714,23 @@ class LeRobotDataset(torch.utils.data.Dataset):
                 self.revision = get_safe_version(self.repo_id, self.revision)
             self.download(download_videos)
             self.hf_dataset = self.load_hf_dataset()
+        
+        if self.hf_dataset is not None and self.drop_columns:
+            existing_cols = self.hf_dataset.column_names
+            cols_to_remove = [c for c in self.drop_columns if c in existing_cols]
+            
+            if cols_to_remove:
+                logging.info(f"Dropping columns from HF Dataset: {cols_to_remove}")
+                self.hf_dataset = self.hf_dataset.remove_columns(cols_to_remove)
+
+        # 2. Remove from Metadata (Crucial: prevents __getitem__ from outputting these keys)
+        if self.drop_columns:
+            for col in self.drop_columns:
+                # We must delete it from the info dictionary, which drives properties like
+                # self.meta.camera_keys and self.meta.features
+                if col in self.meta.info["features"]:
+                    logging.info(f"Removing feature from metadata: {col}")
+                    del self.meta.info["features"][col]
 
         # Setup delta_indices
         if self.delta_timestamps is not None:

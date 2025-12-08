@@ -15,7 +15,7 @@ import time
 class MouseInput:
     """Mouse input handler for controlling the agent"""
     
-    def __init__(self, window_name="PushT Environment", env_size=512, coarsity=None):
+    def __init__(self, window_name="PushT Environment", env_size=512):
         self.window_name = window_name
         self.env_size = env_size  # Environment coordinate space (512x512)
         self.window_width = None
@@ -25,7 +25,6 @@ class MouseInput:
         self.finish_episode = False
         self.quit_recording = False
         self.recording_started = False
-        self.coarsity = coarsity
         
     def mouse_callback(self, event, x, y, flags, param):
         """OpenCV mouse callback function"""
@@ -77,12 +76,13 @@ class MouseInput:
 class PushTTeleopRecorder:
     """Records teleoperation episodes for LeRobot PushT environment with mouse control"""
 
-    def __init__(self, repo_id="pusht_teleop", local_dir="data/pusht_teleop", fps=10, save_videos=True, coarsity=None):
+    def __init__(self, action_type, repo_id="pusht_teleop", local_dir="data/pusht_teleop", fps=10, save_videos=True, coarsity=None, ):
         self.repo_id = repo_id
         self.local_dir = Path(local_dir)
         self.fps = fps
         self.save_videos = save_videos
         self.coarsity = coarsity
+        self.action_type = action_type
 
         # Import and create PushT environment
         try:
@@ -96,6 +96,7 @@ class PushTTeleopRecorder:
                 observation_width=512,
                 observation_height=512,
                 coarsity=self.coarsity,
+                action_type=self.action_type
             )
         except ImportError:
             print("Error: gym_pusht not installed. Install with: pip install gym-pusht")
@@ -182,11 +183,12 @@ class PushTTeleopRecorder:
         # Update mouse with window size for proper coordinate scaling
         self.mouse.set_window_size(w, h)
 
+        # THE FOLLOWING IS NOT YET SUPPORTED FOR RELATIVE ACTIONS
         # Draw crosshair at action position (scale from env coords to window coords)
-        action_x = int((action[0] / 512.0) * w)
-        action_y = int((action[1] / 512.0) * h)
-        cv2.drawMarker(display_img, (action_x, action_y), (0, 255, 0), 
-                      cv2.MARKER_CROSS, 20, 2)
+        # action_x = int((action[0] / 512.0) * w)
+        # action_y = int((action[1] / 512.0) * h)
+        # cv2.drawMarker(display_img, (action_x, action_y), (0, 255, 0), 
+        #               cv2.MARKER_CROSS, 20, 2)
 
         # Add info overlay
         font = cv2.FONT_HERSHEY_SIMPLEX
@@ -260,6 +262,8 @@ class PushTTeleopRecorder:
         while not self.mouse.recording_started:
             img = self.env.render()
             action = self.mouse.get_action()
+            if self.action_type == "relative":
+                action = action - self.env.unwrapped.agent.position
             self.render_window(img, 0, 0, 0, 0, action, recording=False)
 
             key = cv2.waitKey(10) & 0xFF
@@ -288,11 +292,14 @@ class PushTTeleopRecorder:
 
             # Get action from mouse position
             action = self.mouse.get_action()
+            if self.action_type == "relative":
+                action = action - self.env.unwrapped.agent.position
 
             # Step environment
-            next_obs, reward, is_done, is_truncated, info = self.env.step(action)
+            next_obs, reward, is_done, is_truncated, info = self.env.step(np.copy(action))
             total_reward += reward
             max_reward = max(max_reward, reward)
+
 
             # Render
             _ = self.env.render()
@@ -429,9 +436,10 @@ class PushTTeleopRecorder:
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Record PushT teleoperation episodes with mouse control')
-    parser.add_argument('--episodes', type=int, default=2, help='Number of episodes to record')
+    parser.add_argument('--episodes', type=int, default=20, help='Number of episodes to record')
     parser.add_argument('--fps', type=int, default=10, help='Frames per second')
     parser.add_argument('--no-video', action='store_true', help='Disable video recording')
+    parser.add_argument('--action_type', type=str,  help='relative or absolute actions for pusht env')
     parser.add_argument('--coarsity', type=str, default=None, help='Coarsity of PushT environment')
     parser.add_argument('--dir_prefix', type=str, default="TEST", help='Prefix for directory name')
     args = parser.parse_args()
@@ -441,7 +449,7 @@ def main():
     now = time.localtime()
     dir_suffix = f"Y{now.tm_year:04d}_M{now.tm_mon:02d}_D{now.tm_mday:02d}_H{now.tm_hour:02d}_M{now.tm_min:02d}_S{now.tm_sec:02d}"
     
-    repo_id = f"{args.dir_prefix}_pusht_teleop_{dir_suffix}_{args.coarsity}"
+    repo_id = f"{args.dir_prefix}_pusht_teleop_{dir_suffix}_{args.coarsity}_{args.action_type}"
     dir = f"pusht_teleop_data/{repo_id}"
     
     
@@ -451,7 +459,8 @@ def main():
         local_dir=dir,
         fps=args.fps,
         save_videos=not args.no_video,
-        coarsity=args.coarsity
+        coarsity=args.coarsity,
+        action_type=args.action_type
     )
     recorder.run(num_episodes=args.episodes)
 

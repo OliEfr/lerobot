@@ -35,6 +35,7 @@ class DatasetConfig:
     use_imagenet_stats: bool = True
     video_backend: str = field(default_factory=get_safe_default_codec)
     streaming: bool = False
+    drop_columns: list[str] | None = None,
 
 
 @dataclass
@@ -56,6 +57,8 @@ class EvalConfig:
     batch_size: int = 50
     # `use_async_envs` specifies whether to use asynchronous environments (multiprocessing).
     use_async_envs: bool = False
+    max_episodes_rendered: int = 4
+    only_render_failures: bool = False
 
     def __post_init__(self) -> None:
         if self.batch_size > self.n_episodes:

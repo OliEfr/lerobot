@@ -22,7 +22,7 @@ class AutoImageResizeProcessorStep(ObservationProcessorStep):
         resize_params: A dictionary of image keys with their corresponding target resize.
     """
 
-    input_features: dict[str, Any] | None = None
+    input_features: list[str] | None = None # must be list an not PolicyFeature to be serializable for saving
 
     is_first_it = True
 
