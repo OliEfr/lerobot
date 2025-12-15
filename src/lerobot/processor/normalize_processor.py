@@ -311,6 +311,7 @@ class _NormalizationMixin:
             NormalizationMode.MIN_MAX,
             NormalizationMode.QUANTILES,
             NormalizationMode.QUANTILE10,
+            NormalizationMode.ASINH_MIN_MAX,
         ):
             raise ValueError(f"Unsupported normalization mode: {norm_mode}")
 
@@ -336,6 +337,31 @@ class _NormalizationMixin:
             if inverse:
                 return tensor * std + mean
             return (tensor - mean) / denom
+
+        if norm_mode == NormalizationMode.ASINH_MIN_MAX:
+            raise ValueError("This function works, but I dont intend to use it atm.")
+            scale = 2.0
+
+            min_val = torch.asinh(stats.get("min", None) / scale)
+            max_val = torch.asinh(stats.get("max", None) / scale)
+            if min_val is None or max_val is None:
+                raise ValueError(
+                    "ASINH_MIN_MAX normalization mode requires min and max stats, please update the dataset with the correct stats"
+                )
+
+            min_val, max_val = torch.asinh(stats["min"] / scale), torch.asinh(stats["max"] / scale)
+            denom = max_val - min_val
+            # When min_val == max_val, substitute the denominator with a small epsilon
+            # to prevent division by zero. This consistently maps an input equal to
+            # min_val to -1, ensuring a stable transformation.
+            denom = torch.where(
+                denom == 0, torch.tensor(self.eps, device=tensor.device, dtype=tensor.dtype), denom
+            )
+            if inverse:
+                # Map from [-1, 1] back to [min, max]
+                return scale * torch.sinh((tensor + 1) / 2 * denom + min_val)
+            # Map from [min, max] to [-1, 1]
+            return 2 * (torch.asinh(tensor/scale) - min_val) / denom - 1
 
         if norm_mode == NormalizationMode.MIN_MAX:
             min_val = stats.get("min", None)

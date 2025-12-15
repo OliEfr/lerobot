@@ -312,7 +312,7 @@ def modify_features(
     if add_features:
         required_keys = {"dtype", "shape"}
         for feature_name, (_, feature_info) in add_features.items():
-            if feature_name in dataset.meta.features:
+            if feature_name in dataset.meta.features and feature_name not in remove_features_list:
                 raise ValueError(f"Feature '{feature_name}' already exists in dataset")
 
             if not required_keys.issubset(feature_info.keys()):
@@ -1002,7 +1002,7 @@ def _copy_data_with_feature_changes(
                     if len(feature_slice.shape) > 1 and feature_slice.shape[1] == 1:
                         df[feature_name] = feature_slice.flatten()
                     else:
-                        df[feature_name] = feature_slice
+                        df[feature_name] = [feature_slice[i] for i in range(len(feature_slice))]
             frame_idx = end_idx
 
         # Write using the same chunk/file structure as source

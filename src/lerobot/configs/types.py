@@ -37,6 +37,7 @@ class NormalizationMode(str, Enum):
     IDENTITY = "IDENTITY"
     QUANTILES = "QUANTILES"
     QUANTILE10 = "QUANTILE10"
+    ASINH_MIN_MAX = "ASINH_MIN_MAX"
 
 
 @dataclass

@@ -55,6 +55,16 @@ from lerobot.utils.utils import (
 
 from lerobot.datasets.libero_dataset_tools import analyze_dataset_tasks
 
+import numpy as np
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+from sklearn.decomposition import PCA
+from umap import UMAP
+from sklearn.manifold import TSNE
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import TensorDataset, DataLoader
+from sklearn.preprocessing import StandardScaler
 
 def update_policy(
     train_metrics: MetricsTracker,
@@ -429,9 +439,283 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         if wandb_logger:
             wandb_logger.log_dict({"rnd_ood_loss": epoch_loss_ood}, epoch, mode="train")
 
+    # all_actions = []
+    # all_states = []
+    # all_env_states = []
+
+    # Iterate through the DataLoader
+    # for batch in tqdm(dataloader, desc=f"Processing .."):
+        # all_actions.append(batch["action"][:,0,:] - batch["observation.state"][:,0,:])  # appends (batch_size, action_dim)
+        # all_states.append(batch["observation.state"][:, 0, :])  # (batch_size, state_dim)
+        # all_env_states.append(batch["observation.environment_state"][:, 0, :])  # (batch_size, env_state_dim)
+
+    # Concatenate all batches
+    # all_actions_cat = torch.cat(all_actions, dim=0).clone()  # (dataset_size, action_dim)
+    # all_states_cat = torch.cat(all_states, dim=0)  # (dataset_size, state_dim)
+    # all_env_states_cat = torch.cat(all_env_states, dim=0)  # (dataset_size, env_state_dim)
+
+    # # Calculate magnitudes
+    # action_magnitudes = np.linalg.norm(all_actions_cat.cpu.numpy(), axis=-1)
+    # action_magnitudes = torch.linalg.norm(all_actions_cat, axis=-1)
+    # non_zero_mask = action_magnitudes > 0
+    # magnitudes_nonzero = action_magnitudes[non_zero_mask]
+
+    # weights = torch.exp(-2*(action_magnitudes-1))+0.1
+    # weights = -3 * torch.atan(action_magnitudes - 5) + 5.7
+    # weights_mean= weights.mean()
+    # policy.diffusion.loss_weight_mean = weights_mean
+
+    # # Concatenate state and environment state
+    # combined_state = all_states_cat
+    # # combined_state = torch.cat([all_states_cat, all_env_states_cat], dim=-1)  # (dataset_size, state_dim + env_state_dim)
+    # combined_state_nonzero = combined_state[non_zero_mask].cpu().numpy()
+
+    # # Apply PCA to reduce to 2D
+    # print("Applying PCA to combined state...")
+    # pca = PCA(n_components=2)
+    # state_compressed = pca.fit_transform(combined_state_nonzero)
+    # print(f"PCA explained variance ratio: {pca.explained_variance_ratio_}")
+    # print(f"Total variance explained: {pca.explained_variance_ratio_.sum():.2%}")
+
+    # print("Applying UMAP to combined state...")
+    # umap = UMAP(n_components=2, random_state=42, n_neighbors=15, min_dist=0.1)
+    # state_compressed = umap.fit_transform(combined_state_nonzero)
+
+    # # tsne = TSNE(
+    # #     n_components=2,
+    # #     random_state=42,
+    # #     perplexity=50,       # Higher for larger datasets (30-100 is good)
+    # #     learning_rate='auto',
+    # #     init='pca',          # PCA initialization is faster
+    # #     n_jobs=-1
+    # # )
+    # # state_tsne = tsne.fit_transform(combined_state_nonzero)
+    # # print("t-SNE complete!")
+
+    # # Non-zero action statistics
+    # print("\nNon-zero actions only:")
+    # print(f"  Count: {len(magnitudes_nonzero)} ({100*non_zero_mask.sum()/len(non_zero_mask):.2f}% of total)")
+    # print(f"  Min magnitude:  {magnitudes_nonzero.min():.6f}")
+    # print(f"  Max magnitude:  {magnitudes_nonzero.max():.6f}")
+    # print(f"  Mean magnitude: {magnitudes_nonzero.mean():.6f}")
+    # print(f"  Std magnitude:  {magnitudes_nonzero.std():.6f}")
+    # print(f"  Median magnitude: {np.median(magnitudes_nonzero):.6f}")
+
+    # # Create visualization
+    # fig, ax = plt.subplots(figsize=(10, 8))
+
+    # # Create scatter plot with color representing action magnitude
+    # scatter = ax.scatter(
+    #     state_compressed[:, 0],
+    #     state_compressed[:, 1],
+    #     c=torch.asinh(torch.tensor(magnitudes_nonzero)/2).cpu().numpy() , # scale using asinh
+    #     cmap='viridis',
+    #     s=10,
+    #     alpha=0.6,
+    #     edgecolors='none'
+    # )
+
+    # # Add colorbar
+    # cbar = plt.colorbar(scatter, ax=ax)
+    # cbar.set_label('Action Magnitude', fontsize=12)
+
+    # # Labels and title
+    # ax.set_xlabel(f'1', fontsize=12)
+    # ax.set_ylabel(f'2', fontsize=12)
+    # ax.set_title('Action Magnitude vs State compressed', fontsize=14, fontweight='bold')
+    # ax.grid(True, alpha=0.3)
+
+    # plt.tight_layout()
+    # plt.show()
+
+    # print(f"Total non-zero actions plotted: {len(magnitudes_nonzero)}")
+    # print(f"Action magnitude range: [{magnitudes_nonzero.min():.3f}, {magnitudes_nonzero.max():.3f}]")
+
+    # # --- Parameters for Scaling and Training ---
+    # K = 1.0       # Hyperparameter for overall scale of beta
+    # EPSILON = 0.05  # Numerical stability constant for inverse magnitude
+    # NN_HIDDEN_SIZE = 512
+    # NN_EPOCHS = 50
+    # NN_BATCH_SIZE = 128
+    # NN_LEARNING_RATE = 1e-3
+
+    # # --- 1. Data Preparation for Regressor (Directly using 2D state) ---
+
+    # # Input data: The 2D states (X_train)
+    # # combined_state_nonzero contains the 2D state for non-zero actions
+    # X_train_np = combined_state_nonzero
+
+    # # --- 1. NORMALIZE INPUTS ---
+    # input_scaler = StandardScaler()
+    # X_train_scaled = input_scaler.fit_transform(X_train_np)
+    # nn_X_train = torch.tensor(X_train_scaled, dtype=torch.float32)
+
+    # # --- 2. LOG-TRANSFORM TARGETS ---
+    # # This makes the range manageable: log(0.0027) ≈ -5.9, log(19.99) ≈ 3.0
+    # target_beta = K / (magnitudes_nonzero + EPSILON)
+    # target_beta_log = np.log(target_beta)
+
+    # nn_y_train = torch.tensor(target_beta_log, dtype=torch.float32).unsqueeze(1)
+
+    # # Create DataLoader for training
+    # nn_ds = TensorDataset(nn_X_train, nn_y_train)
+    # nn_loader = DataLoader(nn_ds, batch_size=NN_BATCH_SIZE, shuffle=True)
+    # print(f"Regressor dataset size: {len(nn_X_train)}")
+    # print(f"Target beta range (log-space): [{nn_y_train.min().item():.3f}, {nn_y_train.max().item():.3f}]")
+    # print(f"Target beta range (original): [{target_beta.min():.3f}, {target_beta.max():.3f}]")
+
+    # # --- 2. Define and Train the Neural Network Regressor ---
+
+    # class ScaleRegressor(nn.Module):
+    #     def __init__(self, input_dim, hidden_size, dropout_rate=0.2):
+    #         super().__init__()
+    #         self.net = nn.Sequential(
+    #             nn.Linear(input_dim, hidden_size),
+    #             nn.ReLU(),  # ReLU is more stable than LeakyReLU for this
+    #             nn.Dropout(dropout_rate),  # Add dropout
+    #             nn.Linear(hidden_size, hidden_size),
+    #             nn.ReLU(),  # ReLU is more stable than LeakyReLU for this
+    #             nn.Dropout(dropout_rate),  # Add dropout
+    #             nn.Linear(hidden_size, hidden_size),
+    #             nn.ReLU(),
+    #             nn.Dropout(dropout_rate),  # Add dropout
+    #             nn.Linear(hidden_size, 1),
+    #         )
+
+    #     def forward(self, x):
+    #         return self.net(x)
+
+    # # Initialize model, loss, and optimizer
+    # nn_model = ScaleRegressor(input_dim=2, hidden_size=NN_HIDDEN_SIZE)
+    # nn_criterion = nn.MSELoss()
+    # nn_optimizer = optim.Adam(nn_model.parameters(), lr=NN_LEARNING_RATE)
+
+    # # Training loop with epoch logging
+    # print("\nTraining Scale Regressor...")
+    # nn_model.train()
+    # for epoch in tqdm(range(NN_EPOCHS), desc="Training Regressor"):
+    #     epoch_loss = 0.0
+    #     batch_count = 0
+
+    #     for states, betas in nn_loader:
+    #         nn_optimizer.zero_grad()
+    #         predicted_betas = nn_model(states)
+    #         loss = nn_criterion(predicted_betas, betas)
+    #         loss.backward()
+    #         nn_optimizer.step()
+
+    #         epoch_loss += loss.item()
+    #         batch_count += 1
+
+    #     avg_epoch_loss = epoch_loss / batch_count
+
+    #     # Log every 10 epochs or first 5 epochs
+    #     if epoch % 10 == 0 or epoch < 5:
+    #         print(f"Epoch {epoch:3d}/{NN_EPOCHS}, Loss: {avg_epoch_loss:.6f}")
+
+    # print(f"Final training loss: {avg_epoch_loss:.6f}")
+
+    # # --- 3. Generate and Plot Learned Scaling Function ---
+
+    # # Set model to evaluation mode
+    # nn_model.eval()
+
+    # X_min, X_max = 0, 500
+    # Y_min, Y_max = 0, 500
+
+    # grid_points = 50 # 50x50 grid = 2500 points
+    # xx, yy = np.meshgrid(
+    #     np.linspace(X_min, X_max, grid_points),
+    #     np.linspace(Y_min, Y_max, grid_points)
+    # )
+
+    # # Prepare grid points for NN inference
+    # grid_states = np.vstack([xx.ravel(), yy.ravel()]).T
+
+    # # IMPORTANT: Scale the grid states using the same scaler
+    # grid_states_scaled = input_scaler.transform(grid_states)
+    # grid_states_tensor = torch.tensor(grid_states_scaled, dtype=torch.float32)
+
+    # # Infer the learned scale (beta) for each grid point
+    # with torch.no_grad():
+    #     learned_beta_log = nn_model(grid_states_tensor).squeeze().numpy()
+    #     # IMPORTANT: Transform back from log-space to original scale
+    #     learned_beta = np.exp(learned_beta_log)
+
+    # # Reshape the results to the grid dimensions
+    # learned_beta_grid = learned_beta.reshape(xx.shape)
+
+    # print(f"\nLearned beta statistics:")
+    # print(f"  Min: {learned_beta.min():.6f}")
+    # print(f"  Max: {learned_beta.max():.6f}")
+    # print(f"  Mean: {learned_beta.mean():.6f}")
+    # print(f"  Should be close to target range: [{target_beta.min():.3f}, {target_beta.max():.3f}]")
+
+    # # --- 4. Plotting (Original Data + Learned Scale Overlay) ---
+
+    # fig, ax = plt.subplots(figsize=(10, 8))
+
+    # # 1. Plot the Original Data (Action Magnitudes)
+    # # Use the un-PCA'd state data (X_train_np)
+    # scatter = ax.scatter(
+    #     state_compressed[:, 0],
+    #     state_compressed[:, 1],
+    #     # Use asinh scaling for visual clarity of magnitude
+    #     c=torch.asinh(torch.tensor(magnitudes_nonzero)/2).cpu().numpy(),
+    #     cmap='viridis',
+    #     s=10,
+    #     alpha=0.6,
+    #     edgecolors='none',
+    #     zorder=1 # Ensure scatter points are visually distinct
+    # )
+
+    # # 2. Plot the Learned Scale (Beta) as an Overlay (Contour Plot)
+    # contour = ax.contourf(
+    #     pca.transform(xx), pca.transform(yy), learned_beta_grid,
+    #     levels=15, # Number of contour levels
+    #     cmap='plasma', # A different colormap to clearly distinguish the overlay
+    #     alpha=0.4, # Transparency to see the scatter plot underneath
+    #     zorder=0 # Ensure contour is below the scatter points
+    # )
+
+    # # Create a separate colorbar for the learned scale (Beta)
+    # cbar_beta = plt.colorbar(contour, ax=ax, pad=0.1)
+    # cbar_beta.set_label(r'Learned State Scale $\beta(\mathbf{S})$', fontsize=12)
+
+    # # Colorbar for Action Magnitude (Original data)
+    # cbar_mag = plt.colorbar(scatter, ax=ax, orientation='vertical', shrink=0.8)
+    # cbar_mag.set_label('Action Magnitude (asinh scaled)', fontsize=12)
+
+    # # Labels and title
+    # ax.set_xlabel(f'State Dimension 1', fontsize=12)
+    # ax.set_ylabel(f'State Dimension 2', fontsize=12)
+    # ax.set_title('Action Magnitude (Scatter) vs Learned Scale $\\beta$ (Contour)', fontsize=14, fontweight='bold')
+    # ax.grid(True, alpha=0.3)
+    # ax.set_xlim(X_min, X_max)
+    # ax.set_ylim(Y_min, Y_max)
+
+    # plt.tight_layout()
+    # plt.show()
+
     for _ in range(step, cfg.steps):
         start_time = time.perf_counter()
         batch = next(dl_iter)
+        # rel_actions = (
+        #     (batch["action"] - batch["observation.state"])
+        #     .clone()
+        #     .detach()
+        # )
+        # rel_actions_magnitudes = torch.linalg.norm(rel_actions, axis=-1)
+
+        # policy.diffusion.loss_scales = (
+        #     -3 * torch.atan(rel_actions_magnitudes - 5) + 5.7
+        # ).clone().detach()
+        # torch.exp(-2 * (rel_actions_magnitudes - 1)) + 0.1
+
+        # modify obs to only include indices n_obs_steps expected by policy
+        # batch["observation.state"] = batch["observation.state"][:,:2,:]
+        # batch["observation.environment_state"] = batch["observation.environment_state"][:,:2,:]
+
         batch = preprocessor(batch)
         train_tracker.dataloading_s = time.perf_counter() - start_time
 

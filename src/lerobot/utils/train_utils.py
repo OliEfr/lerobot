@@ -161,5 +161,5 @@ def load_training_state(
     optimizer = load_optimizer_state(optimizer, training_state_dir)
     if scheduler is not None:
         scheduler = load_scheduler_state(scheduler, training_state_dir)
-
+    print("Loaded training state from checkpoint.")
     return step, optimizer, scheduler

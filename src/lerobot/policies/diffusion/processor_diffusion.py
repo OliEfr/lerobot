@@ -69,7 +69,8 @@ def make_diffusion_pre_post_processors(
     if config.partial_green_t_cover_processor:
         input_steps.append(PartialGreenTCoverProcessorStep())
 
-    input_steps.append(AutoImageResizeProcessorStep(input_features=config.input_features))
+    input_steps.append(AutoImageResizeProcessorStep(input_features=list(config.input_features.keys())
+)) # pass as list, otherwise not serializable for saving
     input_steps.append(RenameObservationsProcessorStep(rename_map={}))
     input_steps.append(AddBatchDimensionProcessorStep())
     input_steps.append(DeviceProcessorStep(device=config.device))

@@ -203,7 +203,10 @@ class DiffusionModel(nn.Module):
             self.num_inference_steps = self.noise_scheduler.config.num_train_timesteps
         else:
             self.num_inference_steps = config.num_inference_steps
-
+                
+        # self.loss_weight_mean = None
+        # self.loss_scales = None
+            
     # ========= inference  ============
     def conditional_sample(
         self,
@@ -374,6 +377,11 @@ class DiffusionModel(nn.Module):
             raise ValueError(f"Unsupported prediction type {self.config.prediction_type}")
 
         loss = F.mse_loss(pred, target, reduction="none")
+        
+        # loss = F.l1_loss(pred, target, reduction="none")
+
+        # assert self.loss_weight_mean is not None and self.loss_scales is not None
+        # loss = loss * self.loss_scales.unsqueeze(-1) / self.loss_weight_mean # NOTE need to unsqueezed as self.loss_scales is only defined for action magnitudes
 
         # Mask loss wherever the action is padded with copies (edges of the dataset trajectory).
         if self.config.do_mask_loss_for_padding:

@@ -377,7 +377,6 @@ def eval_policy(
                     break
                 if only_render_failures:
                     # skip saving if episode was successful -> only save videos of failed episodes
-                    if 
                     if rollout_data["success"][i][done_index]:
                         # just a check that I understood the code correctly
                         assert batch_successes[i], "This should not be triggered. I most likely misunderstood the code"
