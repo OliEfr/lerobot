@@ -166,6 +166,7 @@ class DiffusionConfig(PreTrainedConfig):
     
     # RND
     use_rnd: bool = False
+    train_only_rnd: bool = False
 
     def __post_init__(self):
         super().__post_init__()

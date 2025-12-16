@@ -100,6 +100,34 @@ class DiffusionPolicy(PreTrainedPolicy):
         return actions
 
     @torch.no_grad()
+    def predict_rnd(self, batch: dict[str, Tensor]) -> Tensor:
+        """Predict the RND loss given environment observations."""
+        # stack n latest observations from the queue
+        if ACTION in batch:
+            batch.pop(ACTION)
+
+        if self.config.image_features:
+            raise ValueError("Need to check this logic.")
+            batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
+            batch[OBS_IMAGES] = torch.stack([batch[key] for key in self.config.image_features], dim=-4)
+        batch = {k: torch.stack(list(self._queues[k]), dim=1) for k in batch if k in self._queues}
+        rnd_score = self.rnd.compute_loss(batch).mean()
+
+        return rnd_score
+    
+    @torch.no_grad()
+    def populate_queues(self, batch: dict[str, Tensor]) -> None:
+        # NOTE: for offline evaluation, we have action in the batch, so we need to pop it out
+        if ACTION in batch:
+            batch.pop(ACTION)
+
+        if self.config.image_features:
+            batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
+            batch[OBS_IMAGES] = torch.stack([batch[key] for key in self.config.image_features], dim=-4)
+        # NOTE: It's important that this happens after stacking the images into a single key.
+        self._queues = populate_queues(self._queues, batch)
+
+    @torch.no_grad()
     def select_action(self, batch: dict[str, Tensor], noise: Tensor | None = None) -> Tensor:
         """Select a single action given environment observations.
 

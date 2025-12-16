@@ -425,19 +425,17 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             if patience_counter >= patience:
                 print(f"[RND] Early stopping triggered at epoch {epoch}. Best test loss: {best_test_loss:.6f}")
                 break
+            
+    # save rnd model separately
+    rnd_save_dir = cfg.output_dir / "rnd"
+    rnd_save_dir.mkdir(parents=True, exist_ok=True)
+    torch.save(policy.diffusion.rnd.state_dict(), rnd_save_dir / "rnd.pth")
 
-        # OOD test
-        epoch_loss_ood = 0
-        for batch in dataloader_train:
-            assert preprocessor[0]._registry_name == "partial_green_t_cover_processor", "Preprocessor must be a PartialGreenTCoverProcessorStep."
-            batch = preprocessor[1:](batch)
-            with torch.no_grad():
-                loss = policy.diffusion.rnd.compute_loss(batch).mean()
-            epoch_loss_ood += loss.item()
-        epoch_loss_ood /= len(dataloader_train)
-        print(f"[RND] OOD Loss: {epoch_loss_ood}")
-        if wandb_logger:
-            wandb_logger.log_dict({"rnd_ood_loss": epoch_loss_ood}, epoch, mode="train")
+
+    if cfg.policy.train_only_rnd:
+        assert cfg.policy.use_rnd, "train_only_rnd requires use_rnd to be True"
+        return
+
 
     # all_actions = []
     # all_states = []

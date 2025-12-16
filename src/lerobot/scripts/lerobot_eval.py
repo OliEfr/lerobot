@@ -60,6 +60,7 @@ from functools import partial
 from pathlib import Path
 from pprint import pformat
 from typing import Any, TypedDict
+import cv2
 
 import einops
 import gymnasium as gym
@@ -89,6 +90,8 @@ from lerobot.utils.utils import (
     init_logging,
     inside_slurm,
 )
+from lerobot.policies.diffusion.modeling_diffusion import RND
+
 
 
 def rollout(
@@ -132,6 +135,16 @@ def rollout(
         The dictionary described above.
     """
     assert isinstance(policy, nn.Module), "Policy must be a PyTorch nn module."
+    
+    rnd_path = None # "outputs/train/2025-12-15/15-09-16_pusht_diffusion_fine_l1_RND_OOD/rnd/rnd.pth"
+    if rnd_path:
+        rnd = RND(config = None)
+        rnd.load_state_dict(torch.load())
+        rnd.eval()
+        rnd.cuda()
+        policy.rnd=rnd
+        rnd_scores = []
+        max_steps = 300
 
     # Reset the policy and environments.
     policy.reset()
@@ -157,6 +170,8 @@ def rollout(
     )
     check_env_attributes_and_types(env)
     while not np.all(done) and step < max_steps:
+        if rnd_path:
+            loop_start = time.time()
         # Numpy array to tensor and changing dictionary keys to LeRobot policy format.
         observation = preprocess_observation(observation)
         if return_observations:
@@ -170,6 +185,9 @@ def rollout(
         with torch.inference_mode():
             action = policy.select_action(observation)
         action = postprocessor(action)
+        if rnd_path:
+            rnd_score = policy.predict_rnd(observation)
+            rnd_scores.append(float(rnd_score))
 
         # Convert to CPU / numpy.
         action_numpy: np.ndarray = action.to("cpu").numpy()
@@ -179,6 +197,42 @@ def rollout(
         observation, reward, terminated, truncated, info = env.step(action_numpy)
         if render_callback is not None:
             render_callback(env)
+
+        if rnd_path:
+            # Render
+            render_img = cv2.cvtColor(observation["pixels"][0], cv2.COLOR_RGB2BGR)
+
+            # Create simple graph matching render_img width
+            width = render_img.shape[1]
+            graph = np.ones((150, width, 3), dtype=np.uint8) * 255
+
+            # Draw RND scores as line
+            scores = np.array(rnd_scores)
+            if len(scores) > 1:
+                min_score = scores.min()
+                max_score = scores.max()
+                
+                for i in range(len(scores) - 1):
+                    x1 = int(i * width / max_steps)
+                    x2 = int((i + 1) * width / max_steps)
+                    y1 = int(130 - (scores[i] - min_score) / (max_score - min_score + 1e-10) * 120)
+                    y2 = int(130 - (scores[i + 1] - min_score) / (max_score - min_score + 1e-10) * 120)
+                    cv2.line(graph, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                
+                # Show current, min, max in scientific notation
+                cv2.putText(graph, f"RND: {rnd_scores[-1]:.2e}", (5, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 0), 1)
+                cv2.putText(graph, f"Max: {max_score:.2e}", (5, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (100, 100, 100), 1)
+                cv2.putText(graph, f"Min: {min_score:.2e}", (5, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (100, 100, 100), 1)
+
+            # Stack and show
+            combined = np.vstack([render_img, graph])
+            cv2.imshow("pusht", combined)
+            cv2.waitKey(1)
+            
+            # Maintain frame rate
+            elapsed = time.time() - loop_start
+            if elapsed < 1.0 / env.envs[0].unwrapped.metadata["render_fps"]:
+                time.sleep(1.0 / env.envs[0].unwrapped.metadata["render_fps"] - elapsed)
 
         # VectorEnv stores is_success in `info["final_info"][env_index]["is_success"]`. "final_info" isn't
         # available if none of the envs finished.

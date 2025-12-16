@@ -10,6 +10,20 @@ import gymnasium as gym
 from PIL import Image
 import cv2
 import time
+import json
+
+from lerobot.configs import parser
+from lerobot.configs.eval import EvalPipelineConfig
+from lerobot.policies.factory import make_policy, make_pre_post_processors
+from lerobot.envs.utils import (
+    preprocess_observation,
+)
+from lerobot.policies.diffusion.modeling_diffusion import RND, DiffusionPolicy
+from lerobot.envs.utils import (
+    preprocess_observation,
+)
+
+
 
 
 class MouseInput:
@@ -76,13 +90,16 @@ class MouseInput:
 class PushTTeleopRecorder:
     """Records teleoperation episodes for LeRobot PushT environment with mouse control"""
 
-    def __init__(self, action_type, repo_id="pusht_teleop", local_dir="data/pusht_teleop", fps=10, save_videos=True, coarsity=None, ):
+    def __init__(self, action_type, repo_id="pusht_teleop", local_dir="data/pusht_teleop", fps=10, save_videos=True, coarsity=None, policy=None, preprocessor=None, postprocessor=None):
         self.repo_id = repo_id
         self.local_dir = Path(local_dir)
         self.fps = fps
         self.save_videos = save_videos
         self.coarsity = coarsity
         self.action_type = action_type
+        self.policy = policy
+        self.preprocessor = preprocessor
+        self.postprocessor = postprocessor
 
         # Import and create PushT environment
         try:
@@ -108,6 +125,10 @@ class PushTTeleopRecorder:
         # Initialize mouse input
         self.window_name = "PushT Environment - Mouse Control"
         self.mouse = MouseInput(self.window_name)
+        
+        self.rnd_window_name = "RND Score Over Time"
+        self.rnd_scores = []
+        self.max_episode_steps = 300
 
         # Initialize LeRobot dataset
         self.dataset = None
@@ -241,6 +262,87 @@ class PushTTeleopRecorder:
             y_offset -= 25
 
         cv2.imshow(self.window_name, cv2.cvtColor(display_img, cv2.COLOR_RGB2BGR))
+        
+    def render_rnd_graph(self):
+        """Render RND score graph in separate window"""
+        graph_width = 800
+        graph_height = 400
+        padding = 60
+        
+        # Create blank canvas
+        canvas = np.ones((graph_height, graph_width, 3), dtype=np.uint8) * 255
+        
+        if len(self.rnd_scores) == 0:
+            cv2.imshow(self.rnd_window_name, canvas)
+            return
+        
+        # Calculate statistics
+        current_score = self.rnd_scores[-1]
+        min_score = min(self.rnd_scores)
+        max_score = max(self.rnd_scores)
+        
+        # Handle case where all scores are the same
+        score_range = max_score - min_score
+        if score_range < 1e-10:
+            score_range = max_score * 0.1 if max_score > 0 else 1e-6
+        
+        # Draw axes
+        cv2.line(canvas, (padding, graph_height - padding), 
+                (graph_width - padding, graph_height - padding), (0, 0, 0), 2)
+        cv2.line(canvas, (padding, padding), 
+                (padding, graph_height - padding), (0, 0, 0), 2)
+        
+        # Plot area dimensions
+        plot_width = graph_width - 2 * padding
+        plot_height = graph_height - 2 * padding
+        
+        # Draw grid lines
+        for i in range(5):
+            y = padding + (plot_height // 4) * i
+            cv2.line(canvas, (padding, y), (graph_width - padding, y), (200, 200, 200), 1)
+        
+        # Plot points
+        if len(self.rnd_scores) > 1:
+            points = []
+            for i, score in enumerate(self.rnd_scores):
+                x = padding + int((i / self.max_episode_steps) * plot_width)
+                normalized = (score - min_score) / score_range
+                y = graph_height - padding - int(normalized * plot_height)
+                points.append((x, y))
+            
+            # Draw line connecting points
+            for i in range(len(points) - 1):
+                cv2.line(canvas, points[i], points[i + 1], (255, 0, 0), 2)
+            
+            # Draw current point
+            cv2.circle(canvas, points[-1], 5, (0, 0, 255), -1)
+        
+        # Add text labels
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.5
+        thickness = 1
+        
+        # Current, min, max scores (in scientific notation)
+        texts = [
+            f"Current: {current_score:.2e}",
+            f"Min: {min_score:.2e}",
+            f"Max: {max_score:.2e}",
+            f"Step: {len(self.rnd_scores)}/{self.max_episode_steps}"
+        ]
+        
+        y_offset = 25
+        for text in texts:
+            cv2.putText(canvas, text, (graph_width - 200, y_offset), 
+                    font, font_scale, (0, 0, 0), thickness)
+            y_offset += 25
+        
+        # Y-axis label
+        cv2.putText(canvas, "RND Score", (5, 30), font, 0.6, (0, 0, 0), thickness)
+        # X-axis label
+        cv2.putText(canvas, "Steps", (graph_width // 2 - 30, graph_height - 10), 
+                font, 0.6, (0, 0, 0), thickness)
+        
+        cv2.imshow(self.rnd_window_name, canvas)
 
     def record_episode_lerobot(self):
         """Record episode using LeRobot dataset format with mouse control"""
@@ -250,6 +352,9 @@ class PushTTeleopRecorder:
         print("🖱️  Move mouse over window and LEFT CLICK to start recording...")
 
         self.mouse.reset_flags()
+        
+        self.rnd_scores = []
+        cv2.namedWindow(self.rnd_window_name)
 
         obs, info = self.env.reset()
 
@@ -295,11 +400,19 @@ class PushTTeleopRecorder:
             if self.action_type == "relative":
                 action = action - self.env.unwrapped.agent.position
 
+            if self.policy:
+                observation = preprocess_observation(obs)
+                observation = self.preprocessor(observation)
+                _ = self.policy.populate_queues(observation) 
+                rnd_score = self.policy.predict_rnd(observation)
+                self.rnd_scores.append(float(rnd_score))
+
+                self.render_rnd_graph()
+
             # Step environment
             next_obs, reward, is_done, is_truncated, info = self.env.step(np.copy(action))
             total_reward += reward
             max_reward = max(max_reward, reward)
-
 
             # Render
             _ = self.env.render()
@@ -431,18 +544,55 @@ class PushTTeleopRecorder:
         if hasattr(self, 'env'):
             self.env.close()
         cv2.destroyAllWindows()
-
-
-def main():
+        try:
+            cv2.destroyWindow(self.rnd_window_name)
+        except:
+            pass
+        
+def parse_custom_args():
     import argparse
-    parser = argparse.ArgumentParser(description='Record PushT teleoperation episodes with mouse control')
-    parser.add_argument('--episodes', type=int, default=20, help='Number of episodes to record')
+    parser = argparse.ArgumentParser(description='Record PushT teleoperation episodes')
+    parser.add_argument('--episodes', type=int, default=100, help='Number of episodes to record')
     parser.add_argument('--fps', type=int, default=10, help='Frames per second')
     parser.add_argument('--no-video', action='store_true', help='Disable video recording')
-    parser.add_argument('--action_type', type=str,  help='relative or absolute actions for pusht env')
-    parser.add_argument('--coarsity', type=str, default=None, help='Coarsity of PushT environment')
+    parser.add_argument('--action_type', type=str, help='relative or absolute actions')
+    parser.add_argument('--coarsity', type=str, help='Coarsity of PushT environment')
     parser.add_argument('--dir_prefix', type=str, default="TEST", help='Prefix for directory name')
-    args = parser.parse_args()
+    parser.add_argument('--rnd_network_path', type=str, default=None, help='Path to trained rnd network') # "outputs/train/2025-12-15/15-09-16_pusht_diffusion_fine_l1_RND_OOD/rnd/rnd.pth"
+    
+    # Parse only known args to avoid conflicts with parser.wrap()
+    args, unknown = parser.parse_known_args()
+    return args
+
+@parser.wrap()
+def main(cfg: EvalPipelineConfig):
+    # Parse your custom arguments
+    args = parse_custom_args()
+    
+    # this requires that the correct config (that would also be passed to leroboto_eval) is passed
+    policy = make_policy(
+        cfg=cfg.policy,
+        env_cfg=cfg.env,
+        rename_map=cfg.rename_map,
+    )
+    
+    if args.rnd_network_path:
+        rnd = RND(config = None)
+        rnd.load_state_dict(torch.load(args.rnd_network_path))
+        rnd.eval()
+        rnd.cuda()
+        policy.rnd = rnd
+    
+    preprocessor_overrides = {
+        "device_processor": {"device": str(policy.config.device)},
+        "rename_observations_processor": {"rename_map": cfg.rename_map},
+    }
+
+    preprocessor, postprocessor = make_pre_post_processors(
+        policy_cfg=cfg.policy,
+        pretrained_path=cfg.policy.pretrained_path,
+        preprocessor_overrides=preprocessor_overrides,
+    )
     
     
     # Append current date and time to directory name
@@ -460,7 +610,10 @@ def main():
         fps=args.fps,
         save_videos=not args.no_video,
         coarsity=args.coarsity,
-        action_type=args.action_type
+        action_type=args.action_type,
+        policy=policy if args.rnd_network_path else None,
+        preprocessor=preprocessor if args.rnd_network_path else None,
+        postprocessor=postprocessor if args.rnd_network_path else None,
     )
     recorder.run(num_episodes=args.episodes)
 
