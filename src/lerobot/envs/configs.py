@@ -22,7 +22,7 @@ from torchvision.transforms.functional import gaussian_blur
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.robots import RobotConfig
 from lerobot.teleoperators.config import TeleoperatorConfig
-from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGE, OBS_IMAGES, OBS_STATE
+from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGE, OBS_IMAGES, OBS_STATE, OBS_DEPTH, OBS_DEPTHS
 
 
 @dataclass
@@ -246,7 +246,7 @@ class LiberoEnv(EnvConfig):
     task_ids: list[int] | None = None # specify task ids within the task suite
     fps: int = 30
     episode_length: int = 520
-    obs_type: str = "pixels_agent_pos"
+    obs_type: str = "pixels_depth_agent_pos"
     render_mode: str = "rgb_array"
     camera_name: str = "agentview_image,robot0_eye_in_hand_image"
     init_states: bool = True
@@ -264,27 +264,29 @@ class LiberoEnv(EnvConfig):
             "agent_pos": OBS_STATE,
             "pixels/agentview_image": f"{OBS_IMAGES}.image",
             "pixels/robot0_eye_in_hand_image": f"{OBS_IMAGES}.image2",
+            "depth/agentview_image": f"{OBS_DEPTHS}.image",
+            "depth/robot0_eye_in_hand_image": f"{OBS_DEPTHS}.image2",
         }
     )
 
     def __post_init__(self):
-        if self.obs_type == "pixels":
+        assert self.obs_type in ["agent_pos", "pixels_depth_agent_pos", "pixels_agent_pos"], "Unkonwn obs type."
+        if "pixels" in self.obs_type:
             self.features["pixels/agentview_image"] = PolicyFeature(
                 type=FeatureType.VISUAL, shape=(self.observation_height, self.observation_width, 3)
             )
             self.features["pixels/robot0_eye_in_hand_image"] = PolicyFeature(
                 type=FeatureType.VISUAL, shape=(self.observation_height, self.observation_width, 3)
             )
-        elif self.obs_type == "pixels_agent_pos":
+        if "agent_pos" in self.obs_type:
             self.features["agent_pos"] = PolicyFeature(type=FeatureType.STATE, shape=(8,))
-            self.features["pixels/agentview_image"] = PolicyFeature(
-                type=FeatureType.VISUAL, shape=(self.observation_height, self.observation_width, 3)
+        if "depth" in self.obs_type:
+            self.features["depth/agentview_image"] = PolicyFeature(
+                type=FeatureType.VISUAL, shape=(self.observation_height, self.observation_width, 1)
             )
-            self.features["pixels/robot0_eye_in_hand_image"] = PolicyFeature(
-                type=FeatureType.VISUAL, shape=(self.observation_height, self.observation_width, 3)
+            self.features["depth/robot0_eye_in_hand_image"] = PolicyFeature(
+                type=FeatureType.VISUAL, shape=(self.observation_height, self.observation_width, 1)
             )
-        else:
-            raise ValueError(f"Unsupported obs_type: {self.obs_type}")
 
     @property
     def gym_kwargs(self) -> dict:

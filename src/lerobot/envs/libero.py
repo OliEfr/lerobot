@@ -30,6 +30,8 @@ from libero.libero import benchmark, get_libero_path
 from libero.libero.envs import OffScreenRenderEnv
 from robosuite.utils.transform_utils import quat2axisangle
 
+from robosuite.utils.camera_utils import get_real_depth_map
+
 
 def _parse_camera_names(camera_name: str | Sequence[str]) -> list[str]:
     """Normalize camera_name into a non-empty list of strings."""
@@ -114,6 +116,7 @@ class LiberoEnv(gym.Env):
         init_states: bool = True,
         episode_index: int = 0,
         camera_name_mapping: dict[str, str] | None = None,
+        depth_name_mapping: dict[str, str] | None = None,
         num_steps_wait: int = 10,
     ):
         super().__init__()
@@ -139,7 +142,13 @@ class LiberoEnv(gym.Env):
                 "agentview_image": "image",
                 "robot0_eye_in_hand_image": "image2",
             }
+        if depth_name_mapping is None:
+            depth_name_mapping = {
+                "agentview_depth": "depth",
+                "robot0_eye_in_hand_depth": "depth2",
+            }
         self.camera_name_mapping = camera_name_mapping
+        self.depth_name_mapping = depth_name_mapping
         self.num_steps_wait = num_steps_wait
         self.episode_index = episode_index
         # Load once and keep
@@ -158,6 +167,15 @@ class LiberoEnv(gym.Env):
                 shape=(self.observation_height, self.observation_width, 3),
                 dtype=np.uint8,
             )
+        depths = {}
+        for cam in self.camera_name:
+            dep = cam.replace("_image", "_depth")
+            depths[self.depth_name_mapping[dep]] = spaces.Box(
+                low=0,
+                high=255,
+                shape=(self.observation_height, self.observation_width, 1),
+                dtype=np.float32,
+            )
 
         if self.obs_type == "state":
             raise NotImplementedError(
@@ -175,6 +193,19 @@ class LiberoEnv(gym.Env):
             self.observation_space = spaces.Dict(
                 {
                     "pixels": spaces.Dict(images),
+                    "agent_pos": spaces.Box(
+                        low=AGENT_POS_LOW,
+                        high=AGENT_POS_HIGH,
+                        shape=(OBS_STATE_DIM,),
+                        dtype=np.float64,
+                    ),
+                }
+            )
+        elif self.obs_type == "pixels_depth_agent_pos":
+            self.observation_space = spaces.Dict(
+                {
+                    "pixels": spaces.Dict(images),
+                    "depths": spaces.Dict(depths),
                     "agent_pos": spaces.Box(
                         low=AGENT_POS_LOW,
                         high=AGENT_POS_HIGH,
@@ -204,16 +235,25 @@ class LiberoEnv(gym.Env):
             "camera_heights": self.observation_height,
             "camera_widths": self.observation_width,
         }
+        if "depth" in self.obs_type:
+            env_args["camera_depths"] = True
         env = OffScreenRenderEnv(**env_args)
         env.reset()
         return env
 
     def _format_raw_obs(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         images = {}
+        depths = {}
         for camera_name in self.camera_name:
             image = raw_obs[camera_name]
             image = image[::-1, ::-1]  # rotate 180 degrees
             images[self.camera_name_mapping[camera_name]] = image
+
+            depth_name = camera_name.replace("_image", "_depth")
+            depth = get_real_depth_map(self._env.sim, raw_obs[depth_name])
+            depth = depth[::-1, ::-1]  # rotate 180 degrees
+            depths[self.depth_name_mapping[depth_name]] = depth
+
         state = np.concatenate(
             (
                 raw_obs["robot0_eef_pos"],
@@ -228,6 +268,12 @@ class LiberoEnv(gym.Env):
             return {
                 "pixels": images.copy(),
                 "agent_pos": agent_pos,
+            }
+        if self.obs_type == "pixels_depth_agent_pos":
+            return {
+                "pixels": images.copy(),
+                "agent_pos": agent_pos,
+                "depths": depths.copy(),
             }
         raise NotImplementedError(
             f"The observation type '{self.obs_type}' is not supported in LiberoEnv. "
