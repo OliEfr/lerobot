@@ -49,6 +49,7 @@ You can learn about the CLI options for this script in the `EvalPipelineConfig` 
 import concurrent.futures as cf
 import json
 import logging
+import os
 import threading
 import time
 from collections import defaultdict
@@ -61,6 +62,7 @@ from pathlib import Path
 from pprint import pformat
 from typing import Any, TypedDict
 import cv2
+import zmq
 
 import einops
 import gymnasium as gym
@@ -92,6 +94,142 @@ from lerobot.utils.utils import (
 )
 from lerobot.policies.diffusion.modeling_diffusion import RND
 
+
+class SAM3StreamClient:
+    """Client for streaming frames to SAM3 and receiving segmented frames via ZMQ."""
+
+    def __init__(
+        self,
+        send_endpoint: str = "tcp://localhost:5555",
+        recv_endpoint: str = "tcp://localhost:5556",
+        target_size: tuple[int, int] = (960, 540),  # (width, height) expected by SAM3
+        output_dir: str | None = "output_sam3",  # Directory to save segmented frames
+    ):
+        """
+        Initialize ZMQ sockets for SAM3 streaming.
+
+        Args:
+            send_endpoint: ZMQ endpoint to send frames to SAM3.
+            recv_endpoint: ZMQ endpoint to receive segmented frames from SAM3.
+            image_keys: Keys to look for in observation dict to find RGB images.
+            target_size: (width, height) to resize frames to before sending to SAM3.
+            output_dir: Directory to save segmented frames. None to disable saving.
+        """
+        self.target_size = target_size  # (width, height)
+        self.latest_segmented_frame: np.ndarray | None = None
+        self._last_frame_shape: tuple[int, ...] | None = None
+        self._frame_counter = 0
+        self._output_dir = output_dir
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
+        # Initialize ZMQ context and sockets
+        self._context = zmq.Context()
+
+        # PUSH socket to send frames to SAM3
+        self._sender = self._context.socket(zmq.PUSH)
+        self._sender.setsockopt(zmq.SNDHWM, 1)  # Keep send queue small
+        self._sender.connect(send_endpoint)
+
+        # SUB socket to receive segmented frames from SAM3
+        self._receiver = self._context.socket(zmq.SUB)
+        self._receiver.setsockopt(zmq.CONFLATE, 1)  # Keep only the latest message
+        self._receiver.setsockopt_string(zmq.SUBSCRIBE, "")  # Subscribe to all messages
+        self._receiver.setsockopt(zmq.RCVTIMEO, 0)  # Non-blocking receive
+        self._receiver.connect(recv_endpoint)
+
+    def _extract_rgb_frame(self, observation: dict) -> np.ndarray | None:
+        """Extract RGB frame from observation dict.
+
+        Handles PyTorch tensors in (B, C, H, W) format and converts to (H, W, C) uint8.
+        """
+        tensor = observation["observation.images.image2"].cpu().numpy()
+
+        # Remove batch dimension if present: (B, C, H, W) -> (C, H, W)
+        if tensor.ndim == 4:
+            tensor = tensor[0]
+
+        # Transpose from CHW to HWC if needed
+        if tensor.ndim == 3 and tensor.shape[0] in (1, 3, 4):  # Likely CHW
+            tensor = np.transpose(tensor, (1, 2, 0))
+
+        # Convert float [0,1] to uint8 [0,255]
+        if tensor.dtype in (np.float32, np.float64):
+            tensor = (tensor * 255).clip(0, 255).astype(np.uint8)
+
+        return tensor
+
+    def send_frame(self, observation: dict) -> bool:
+        """
+        Send RGB frame from observation to SAM3.
+
+        Args:
+            observation: Observation dict containing RGB image.
+
+        Returns:
+            True if frame was sent, False otherwise.
+        """
+        rgb_frame = self._extract_rgb_frame(observation)
+        if rgb_frame is None:
+            return False
+
+        # Store original shape for potential use
+        self._last_frame_shape = rgb_frame.shape
+
+        # Resize to target size expected by SAM3
+        target_w, target_h = self.target_size
+        if rgb_frame.shape[:2] != (target_h, target_w):
+            rgb_frame = cv2.resize(rgb_frame, (target_w, target_h))
+
+        # Ensure uint8 and contiguous for tobytes()
+        if rgb_frame.dtype != np.uint8:
+            rgb_frame = rgb_frame.astype(np.uint8)
+        rgb_frame = np.ascontiguousarray(rgb_frame)
+
+        try:
+            self._sender.send(rgb_frame.tobytes(), zmq.NOBLOCK)
+            return True
+        except zmq.Again:
+            return False  # Skip if send would block
+
+    def receive_segmented_frame(self) -> np.ndarray | None:
+        """
+        Receive latest segmented frame from SAM3 (non-blocking).
+
+        Returns:
+            Segmented frame if available (in target_size dimensions), None otherwise.
+        """
+        try:
+            msg = self._receiver.recv(zmq.NOBLOCK)
+            # SAM3 returns frames in target_size (width, height)
+            target_w, target_h = self.target_size
+            self.latest_segmented_frame = np.frombuffer(
+                msg, dtype=np.uint8
+            ).reshape((target_h, target_w, 3))
+
+            # Save to disk
+            if self._output_dir:
+                path = os.path.join(self._output_dir, f"frame_{self._frame_counter:05d}.png")
+                cv2.imwrite(path, cv2.cvtColor(self.latest_segmented_frame, cv2.COLOR_RGB2BGR))
+                self._frame_counter += 1
+
+            return self.latest_segmented_frame
+        except zmq.Again:
+            pass  # No new segmented frame available
+        return None
+
+    def close(self):
+        """Close ZMQ sockets and terminate context."""
+        self._sender.close()
+        self._receiver.close()
+        self._context.term()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
 
 
 def rollout(
@@ -146,6 +284,9 @@ def rollout(
         rnd_scores = []
         max_steps = 300
 
+    # Initialize SAM3 streaming client for segmentation
+    sam3_client = SAM3StreamClient()
+
     # Reset the policy and environments.
     policy.reset()
     observation, info = env.reset(seed=seeds)
@@ -176,6 +317,10 @@ def rollout(
         observation = preprocess_observation(observation)
         if return_observations:
             all_observations.append(deepcopy(observation))
+            
+        # Send RGB observation to SAM3 and receive segmented frame
+        sam3_client.send_frame(observation)
+        sam3_client.receive_segmented_frame()
 
         # Infer "task" from attributes of environments.
         # TODO: works with SyncVectorEnv but not AsyncVectorEnv
@@ -287,6 +432,9 @@ def rollout(
 
     if hasattr(policy, "use_original_modules"):
         policy.use_original_modules()
+
+    # Cleanup SAM3 client
+    sam3_client.close()
 
     return ret
 
