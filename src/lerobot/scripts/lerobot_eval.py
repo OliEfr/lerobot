@@ -103,6 +103,7 @@ class SAM3StreamClient:
         send_endpoint: str = "tcp://localhost:5555",
         recv_endpoint: str = "tcp://localhost:5556",
         target_size: tuple[int, int] = (960, 540),  # (width, height) expected by SAM3
+        original_size: tuple[int, int] = (256,256),
         output_dir: str | None = "output_sam3",  # Directory to save segmented frames
     ):
         """
@@ -116,6 +117,7 @@ class SAM3StreamClient:
             output_dir: Directory to save segmented frames. None to disable saving.
         """
         self.target_size = target_size  # (width, height)
+        self.original_size = original_size
         self.latest_segmented_frame: np.ndarray | None = None
         self._last_frame_shape: tuple[int, ...] | None = None
         self._frame_counter = 0
@@ -201,18 +203,30 @@ class SAM3StreamClient:
         """
         try:
             msg = self._receiver.recv(zmq.NOBLOCK)
-            # SAM3 returns frames in target_size (width, height)
+            # SAM3 returns binary mask in (n_masks, H, W)
+            # n_masks depends on number of tracked objects
             target_w, target_h = self.target_size
+            expected_pixels = target_h * target_w
+            n_channels = len(msg) // expected_pixels
             self.latest_segmented_frame = np.frombuffer(
                 msg, dtype=np.uint8
-            ).reshape((target_h, target_w, 3))
+            ).reshape(( n_channels, target_h, target_w,))
 
-            # Save to disk
+            # select the first segmented object, if there is any
+            if self.latest_segmented_frame.shape[0] == 0:
+                return None
+            self.latest_segmented_frame = self.latest_segmented_frame[0]
+
+            # reshape to original image observation
+            original_w, original_h = self.original_size
+            self.latest_segmented_frame =  cv2.resize(self.latest_segmented_frame, (original_w, original_h))
+
+            # Save to disk (only first channel - cv2 doesn't support 2-channel images)
             if self._output_dir:
                 path = os.path.join(self._output_dir, f"frame_{self._frame_counter:05d}.png")
-                cv2.imwrite(path, cv2.cvtColor(self.latest_segmented_frame, cv2.COLOR_RGB2BGR))
+                frame_to_save = cv2.cvtColor(self.latest_segmented_frame * 255, cv2.COLOR_GRAY2BGR)
+                cv2.imwrite(path, frame_to_save)
                 self._frame_counter += 1
-
             return self.latest_segmented_frame
         except zmq.Again:
             pass  # No new segmented frame available
@@ -230,6 +244,96 @@ class SAM3StreamClient:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
         return False
+
+
+def compute_action_to_segmented_centroid(
+    segmented_frame: np.ndarray,
+    depth_observation: np.ndarray,
+    current_ee_pos: np.ndarray | None = None,
+    camera_intrinsics: dict | None = None,
+    gain: float = 0.1,
+) -> np.ndarray:
+    """
+    Compute delta end-effector action to move towards the centroid of the segmented object.
+
+    Args:
+        segmented_frame: Binary segmentation mask from SAM3 (H, W, 1) or (H, W), uint8.
+                         Non-zero pixels are the segmented object.
+        depth_observation: Depth image (H, W) in meters.
+        current_ee_pos: Current end-effector position [x, y, z]. If None, returns
+                        target position instead of delta.
+        camera_intrinsics: Dict with 'fx', 'fy', 'cx', 'cy'. If None, uses defaults.
+        gain: Proportional gain for the delta action (0-1).
+
+    Returns:
+        delta_action: np.ndarray of shape (6,) or (7,) containing [dx, dy, dz, 0, 0, 0, ...]
+                      Rotations are set to zero.
+    """
+
+    # check shapes
+    depth_observation = depth_observation[0]  # assuming (B,H,W,1)
+    assert depth_observation.shape[:2] == segmented_frame.shape[:2]
+    h, w = depth_observation.shape[:2]
+
+    # Default camera intrinsics (adjust based on your camera)
+    if camera_intrinsics is None:
+        h, w = segmented_frame.shape[:2]
+        camera_intrinsics = {
+            "fx": w,  # focal length x (pixels)
+            "fy": w,  # focal length y (pixels)
+            "cx": w / 2,  # principal point x
+            "cy": h / 2,  # principal point y
+        }
+
+    fx = camera_intrinsics["fx"]
+    fy = camera_intrinsics["fy"]
+    cx = camera_intrinsics["cx"]
+    cy = camera_intrinsics["cy"]
+
+    # Find centroid of the segmented region
+    moments = cv2.moments(segmented_frame)
+    if moments["m00"] < 1e-6:
+        # No segmented object found, return zero action
+        return np.zeros(7, dtype=np.float32)
+
+    centroid_x = int(round(moments["m10"] / moments["m00"]))  # x pixel coordinate
+    centroid_y = int(round(moments["m01"] / moments["m00"]))  # y pixel coordinate
+
+
+
+    # Sample depth in 5x5 neighborhood and take median (robust to noise)
+    depth_patch = depth_observation[
+        centroid_y - 2 : centroid_y + 3, centroid_x - 2 : centroid_x + 3
+    ]
+    valid_depths = depth_patch[depth_patch > 0]
+    if len(valid_depths) == 0:
+        # No valid depth, return zero action
+        return np.zeros(7, dtype=np.float32)
+    centroid_z = np.median(valid_depths)
+
+    # Convert pixel coordinates + depth to 3D camera coordinates
+    # Using pinhole camera model: X = (u - cx) * Z / fx, Y = (v - cy) * Z / fy
+    target_x = (centroid_x - 256 // 2) / 640 # (centroid_x - cx) * centroid_z / fx
+    target_y = (centroid_y - 256 // 2) / 640 # (centroid_y - cy) * centroid_z / fy
+    target_z = centroid_z / 5
+
+    target_pos = np.array([-target_y, target_x, -target_z], dtype=np.float32)
+
+    # Return action with zero rotations: [dx, dy, dz, 0, 0, 0, gripper]
+    action = np.zeros(7, dtype=np.float32)
+    action[:3] = target_pos
+    
+    # Debug: save segmented_frame with centroid overlay
+    debug_dir = "output_centroid_debug"
+    os.makedirs(debug_dir, exist_ok=True)
+    debug_img = cv2.cvtColor(segmented_frame * 255, cv2.COLOR_GRAY2BGR)
+    cv2.circle(debug_img, (int(centroid_x), int(centroid_y)), 5, (0, 0, 255), -1)
+    frame_idx = len(os.listdir(debug_dir))
+    cv2.imwrite(
+        os.path.join(debug_dir, f"segmented_frame_{frame_idx:05d}.png"), debug_img
+    )
+
+    return action
 
 
 def rollout(
@@ -298,6 +402,7 @@ def rollout(
     all_rewards = []
     all_successes = []
     all_dones = []
+    action = torch.zeros((1,7))
 
     step = 0
     # Keep track of which environments are done.
@@ -320,7 +425,22 @@ def rollout(
             
         # Send RGB observation to SAM3 and receive segmented frame
         sam3_client.send_frame(observation)
-        sam3_client.receive_segmented_frame()
+        segmented_frame = sam3_client.receive_segmented_frame()
+
+        # Compute action from segmented centroid only when new segmented frame is received
+        if segmented_frame is not None:
+            depth_key = "observation.depths.depth2"
+            depth_obs = observation[depth_key].cpu().numpy()
+
+            # Compute action to move towards segmented object centroid
+            action_np = compute_action_to_segmented_centroid(
+                segmented_frame=segmented_frame,
+                depth_observation=depth_obs,
+                current_ee_pos=None,  # Could extract from observation if available
+                camera_intrinsics=None,  # Uses defaults
+                gain=1,
+            )
+            action = torch.from_numpy(action_np).unsqueeze(0)  # Add batch dim
 
         # Infer "task" from attributes of environments.
         # TODO: works with SyncVectorEnv but not AsyncVectorEnv

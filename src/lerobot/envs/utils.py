@@ -71,6 +71,32 @@ def preprocess_observation(observations: dict[str, np.ndarray]) -> dict[str, Ten
 
             return_observations[imgkey] = img_tensor
 
+    # Process depth observations similar to pixels
+    if "depths" in observations:
+        if isinstance(observations["depths"], dict):
+            depths = {f"observation.depths.{key}": depth for key, depth in observations["depths"].items()}
+        else:
+            depths = {"observation.depth": observations["depths"]}
+
+        for depth_key, depth in depths.items():
+            depth_tensor = torch.from_numpy(depth)
+
+            # Add batch dimension if needed
+            if depth_tensor.ndim == 2:
+                depth_tensor = depth_tensor.unsqueeze(0).unsqueeze(0)  # (H, W) -> (1, 1, H, W)
+            elif depth_tensor.ndim == 3:
+                depth_tensor = depth_tensor.unsqueeze(0)  # (B, H, W) -> (B, 1, H, W) or handle (H, W, 1)
+                if depth_tensor.shape[-1] == 1:  # (B, H, W, 1) channel last
+                    depth_tensor = einops.rearrange(depth_tensor, "b h w c -> b c h w")
+                elif depth_tensor.shape[1] != 1:  # (B, H, W) -> (B, 1, H, W)
+                    depth_tensor = depth_tensor.unsqueeze(1)
+
+            # Convert to float32, keep metric units (no normalization)
+            if depth_tensor.dtype != torch.float32:
+                depth_tensor = depth_tensor.type(torch.float32)
+
+            return_observations[depth_key] = depth_tensor
+
     if "environment_state" in observations:
         env_state = torch.from_numpy(observations["environment_state"]).float()
         if env_state.dim() == 1:
