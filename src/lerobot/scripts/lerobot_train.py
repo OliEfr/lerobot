@@ -299,8 +299,9 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
 
     # create dataloader for offline training
     if hasattr(cfg.policy, "drop_n_last_frames"):
+        assert not "libero_stats" in locals(), "Still need to handle this case."
+
         shuffle = False
-        assert not "libero_stats" in locals(), "still need to handle this case"
         sampler = EpisodeAwareSampler(
             dataset.meta.episodes["dataset_from_index"],
             dataset.meta.episodes["dataset_to_index"],
@@ -311,6 +312,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         shuffle = True
         sampler = None
         if "libero_stats" in locals():
+            # This is a sampler that only retrieves episodes from a libero dataset corresponding to the task_to_solve
             sample_idx_to_use = libero_stats["task_to_indices"][cfg.task_to_solve]
             sampler = SubsetRandomSampler(sample_idx_to_use)
             shuffle = False # SubsetRandomSampler shuffles by default already
@@ -426,10 +428,10 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                 print(f"[RND] Early stopping triggered at epoch {epoch}. Best test loss: {best_test_loss:.6f}")
                 break
             
-    # save rnd model separately
-    rnd_save_dir = cfg.output_dir / "rnd"
-    rnd_save_dir.mkdir(parents=True, exist_ok=True)
-    torch.save(policy.diffusion.rnd.state_dict(), rnd_save_dir / "rnd.pth")
+        # save rnd model separately
+        rnd_save_dir = cfg.output_dir / "rnd"
+        rnd_save_dir.mkdir(parents=True, exist_ok=True)
+        torch.save(policy.diffusion.rnd.state_dict(), rnd_save_dir / "rnd.pth")
 
 
     if cfg.policy.train_only_rnd:

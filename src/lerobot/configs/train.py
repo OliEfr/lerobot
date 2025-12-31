@@ -68,7 +68,7 @@ class TrainPipelineConfig(HubMixin):
     # Rename map for the observation to override the image and state keys
     rename_map: dict[str, str] = field(default_factory=dict)
     
-    task_to_solve: str | None = None # a task description for libero; only supported for libero
+    task_to_solve: str | None = None # a task description for libero to only load demonstrations from that task in the dataloader; ie "task_to_solve" = "task_to_train_on"; only supported for libero
 
     def validate(self) -> None:
         # HACK: We parse again the cli args here to get the pretrained paths if there was some.
@@ -138,7 +138,7 @@ class TrainPipelineConfig(HubMixin):
 
         if hasattr(self.env, "task_ids") and self.env.task_ids is not None:
             assert "libero" in self.dataset.repo_id, "task_ids is only supported for libero"
-            assert self.task_to_solve is not None, "You probably also only want to train on a specific task."
+            # assert self.task_to_solve is not None, "You probably also only want to train on a specific task."
 
     @classmethod
     def __get_path_fields__(cls) -> list[str]:

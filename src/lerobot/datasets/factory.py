@@ -90,6 +90,8 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
         )
         if cfg.dataset.drop_columns:
             for column_to_drop in cfg.dataset.drop_columns:
+                    if column_to_drop is None:
+                        continue
                     del ds_meta.info["features"][column_to_drop]
         delta_timestamps = resolve_delta_timestamps(cfg.policy, ds_meta)
         if not cfg.dataset.streaming:

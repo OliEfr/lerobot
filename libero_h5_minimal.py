@@ -27,21 +27,6 @@ LIBERO_FEATURES = {
         "shape": (8,),
         "names": {"motors": ["x", "y", "z", "ax", "ay", "az", "g1", "g2"]},
     },
-    "observation.states.ee_state": {
-        "dtype": "float32",
-        "shape": (6,),
-        "names": {"motors": ["x", "y", "z", "ax", "ay", "az"]},
-    },
-    "observation.states.joint_state": {
-        "dtype": "float32",
-        "shape": (7,),
-        "names": {"motors": [f"joint_{i}" for i in range(7)]},
-    },
-    "observation.states.gripper_state": {
-        "dtype": "float32",
-        "shape": (2,),
-        "names": {"motors": ["left", "right"]},
-    },
     "action": {
         "dtype": "float32",
         "shape": (7,),
@@ -70,11 +55,8 @@ def convert_dataset():
         
         for demo in tqdm(demos, desc="Converting Episodes"):
             demo_len = len(demo["obs/agentview_rgb"])
-            
-            # Action preprocessing: (-1: open, 1: close) -> (0: close, 1: open)
+
             actions = np.array(demo["actions"])
-            gripper_actions = (1 - np.clip(actions[:, -1], 0, 1))[:, None]
-            actions = np.concatenate([actions[:, :6], gripper_actions], axis=1)
 
             # State preprocessing
             ee_states = np.array(demo["obs/ee_states"], dtype=np.float32)
@@ -87,9 +69,6 @@ def convert_dataset():
                     "observation.images.image": demo["obs/agentview_rgb"][i],
                     "observation.images.image2": demo["obs/eye_in_hand_rgb"][i],
                     "observation.state": combined_state[i],
-                    "observation.states.ee_state": ee_states[i],
-                    "observation.states.joint_state": demo["obs/joint_states"][i].astype(np.float32),
-                    "observation.states.gripper_state": gripper_states[i],
                     "action": actions[i].astype(np.float32),
                     "task": task_label, # Required for task_index mapping in v3
                 }
