@@ -109,7 +109,7 @@ VISUAL_SERVOING_SETTINGS = {
         "servoing_fnc": "VS_third_person",
     }
 }
-use_visual_servoing_cam = "3rd_person"
+use_visual_servoing_cam = "1st_person"
 use_vs = True
 
 class SAM3StreamClient:
@@ -135,7 +135,8 @@ class SAM3StreamClient:
         """
         self.target_size = target_size  # (width, height)
         self.original_size = original_size
-        self.latest_segmented_frame: np.ndarray | None = None
+        self.camera_names = ["1st_person", "3rd_person"]
+        self.latest_segmented_frame: dict[str, np.ndarray] | None = None
         self._last_frame_shape: tuple[int, ...] | None = None
         self._frame_counter = 0
         self._output_dir = output_dir
@@ -163,89 +164,105 @@ class SAM3StreamClient:
 
         Handles PyTorch tensors in (B, C, H, W) format and converts to (H, W, C) uint8.
         """
-        tensor = observation[VISUAL_SERVOING_SETTINGS[use_visual_servoing_cam]["lerobot_camera_name"]].cpu().numpy()
+        image_batch = np.concatenate(
+            [
+                observation[VISUAL_SERVOING_SETTINGS[cam]["lerobot_camera_name"]].cpu().numpy()
+                for cam in self.camera_names
+            ],
+            axis=0,
+        )
 
-        # Remove batch dimension if present: (B, C, H, W) -> (C, H, W)
-        if tensor.ndim == 4:
-            tensor = tensor[0]
-
-        # Transpose from CHW to HWC if needed
-        if tensor.ndim == 3 and tensor.shape[0] in (1, 3, 4):  # Likely CHW
-            tensor = np.transpose(tensor, (1, 2, 0))
+        image_batch = np.transpose(image_batch, (0, 2, 3, 1))
 
         # Convert float [0,1] to uint8 [0,255]
-        if tensor.dtype in (np.float32, np.float64):
-            tensor = (tensor * 255).clip(0, 255).astype(np.uint8)
+        if image_batch.dtype in (np.float32, np.float64):
+            image_batch = (image_batch * 255).clip(0, 255).astype(np.uint8)
 
-        return tensor
+        return image_batch
 
-    def send_frame(self, observation: dict) -> bool:
+    def send_frame_batched(self, observation: dict) -> bool:
         """
-        Send RGB frame from observation to SAM3.
+        Send batched RGB frames from observation to SAM3.
 
         Args:
-            observation: Observation dict containing RGB image.
+            observation: Observation dict containing RGB images.
 
         Returns:
-            True if frame was sent, False otherwise.
+            True if frames were sent, False otherwise.
         """
-        rgb_frame = self._extract_rgb_frame(observation)
-        if rgb_frame is None:
+        rgb_batch = self._extract_rgb_frame(observation)
+        if rgb_batch is None:
             return False
 
         # Store original shape for potential use
-        self._last_frame_shape = rgb_frame.shape
+        self._last_frame_shape = rgb_batch.shape
 
-        # Resize to target size expected by SAM3
+        # Resize each frame in the batch to target size expected by SAM3
+        # rgb_batch shape: (num_cameras, H, W, 3)
         target_w, target_h = self.target_size
-        if rgb_frame.shape[:2] != (target_h, target_w):
-            rgb_frame = cv2.resize(rgb_frame, (target_w, target_h))
+        if rgb_batch.shape[1:3] != (target_h, target_w):
+            resized_frames = []
+            for i in range(rgb_batch.shape[0]):
+                resized = cv2.resize(rgb_batch[i], (target_w, target_h))
+                resized_frames.append(resized)
+            rgb_batch = np.stack(resized_frames, axis=0)
 
         # Ensure uint8 and contiguous for tobytes()
-        if rgb_frame.dtype != np.uint8:
-            rgb_frame = rgb_frame.astype(np.uint8)
-        rgb_frame = np.ascontiguousarray(rgb_frame)
+        if rgb_batch.dtype != np.uint8:
+            rgb_batch = rgb_batch.astype(np.uint8)
+        rgb_batch = np.ascontiguousarray(rgb_batch)
 
         try:
-            self._sender.send(rgb_frame.tobytes(), zmq.NOBLOCK)
+            self._sender.send(rgb_batch.tobytes(), zmq.NOBLOCK)
             return True
         except zmq.Again:
             return False  # Skip if send would block
 
-    def receive_segmented_frame(self) -> np.ndarray | None:
+    def receive_segmented_frame(self) -> dict[str, np.ndarray] | None:
         """
-        Receive latest segmented frame from SAM3 (non-blocking).
+        Receive latest batch of segmented frames from SAM3 (non-blocking).
 
         Returns:
-            Segmented frame if available (in target_size dimensions), None otherwise.
+            Dict mapping camera names to masks if available, None otherwise.
+            Each mask is in original_size dimensions (H, W), uint8.
         """
         try:
             msg = self._receiver.recv(zmq.NOBLOCK)
-            # SAM3 returns binary mask in (n_masks, H, W)
-            # n_masks depends on number of tracked objects
             target_w, target_h = self.target_size
+            num_cameras = len(self.camera_names)
             expected_pixels = target_h * target_w
-            n_channels = len(msg) // expected_pixels
-            self.latest_segmented_frame = np.frombuffer(
-                msg, dtype=np.uint8
-            ).reshape(( n_channels, target_h, target_w,))
 
-            # select the first segmented object, if there is any
-            if self.latest_segmented_frame.shape[0] == 0:
-                return None
-            self.latest_segmented_frame = self.latest_segmented_frame[0]
+            # Infer n_masks from message size: num_cameras * n_masks * H * W
+            total_elements = len(msg)
+            n_masks = total_elements // (num_cameras * expected_pixels)
 
-            # reshape to original image observation
-            original_w, original_h = self.original_size
-            self.latest_segmented_frame =  cv2.resize(self.latest_segmented_frame, (original_w, original_h))
+            # Reshape to (num_cameras, n_masks, H, W)
+            batch_masks = np.frombuffer(msg, dtype=np.uint8).reshape(
+                (num_cameras, n_masks, target_h, target_w)
+            )
 
-            # Save to disk (only first channel - cv2 doesn't support 2-channel images)
-            if self._output_dir:
-                path = os.path.join(self._output_dir, f"frame_{self._frame_counter:05d}.png")
-                frame_to_save = cv2.cvtColor(self.latest_segmented_frame * 255, cv2.COLOR_GRAY2BGR)
-                cv2.imwrite(path, frame_to_save)
-                self._frame_counter += 1
+            result = {}
+            for i, cam_name in enumerate(self.camera_names):
+                # Select first mask for this camera
+                if batch_masks[i].shape[0] == 0:
+                    continue
+                mask = batch_masks[i, 0]  # Shape (H, W)
+
+                # Resize to original size
+                original_w, original_h = self.original_size
+                mask = cv2.resize(mask, (original_w, original_h))
+                result[cam_name] = mask
+
+                # Save received masks for debugging
+                if self._output_dir:
+                    path = os.path.join(self._output_dir, f"frame_{cam_name}_{self._frame_counter:05d}.png")
+                    frame_to_save = cv2.cvtColor(mask * 255, cv2.COLOR_GRAY2BGR)
+                    cv2.imwrite(path, frame_to_save)
+
+            self._frame_counter += 1
+            self.latest_segmented_frame = result if result else None
             return self.latest_segmented_frame
+
         except zmq.Again:
             pass  # No new segmented frame available
         return None
@@ -346,7 +363,6 @@ def VS_first_person(
     action[:3] = target_pos
     
     # Debug: save segmented_frame with centroid overlay
-    debug_dir = "output_centroid_debug"
     os.makedirs(debug_dir, exist_ok=True)
     debug_img = cv2.cvtColor(segmented_frame * 255, cv2.COLOR_GRAY2BGR)
     cv2.circle(debug_img, (int(centroid_x), int(centroid_y)), 5, (0, 0, 255), -1)
@@ -588,8 +604,11 @@ def rollout(
             
         # Send RGB observation to SAM3 and receive segmented frame
         if use_vs:
-            sam3_client.send_frame(observation)
-            segmented_frame = sam3_client.receive_segmented_frame()
+            sam3_client.send_frame_batched(observation)
+            segmented_frames = sam3_client.receive_segmented_frame()
+            # Extract the mask for the visual servoing camera
+            if segmented_frames is not None:
+                segmented_frame = segmented_frames.get(use_visual_servoing_cam)
 
         # Compute action from segmented centroid only when new segmented frame is received
         if segmented_frame is not None:
