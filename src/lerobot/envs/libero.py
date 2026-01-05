@@ -30,7 +30,12 @@ from libero.libero import benchmark, get_libero_path
 from libero.libero.envs import OffScreenRenderEnv
 from robosuite.utils.transform_utils import quat2axisangle
 
-from robosuite.utils.camera_utils import get_real_depth_map
+from robosuite.utils.camera_utils import (
+    get_real_depth_map,
+    get_camera_extrinsic_matrix,
+    get_camera_intrinsic_matrix,
+)
+from robosuite.utils.transform_utils import pose_inv
 
 
 def _parse_camera_names(camera_name: str | Sequence[str]) -> list[str]:
@@ -328,6 +333,49 @@ class LiberoEnv(gym.Env):
 
     def close(self):
         self._env.close()
+
+    @property
+    def sim(self):
+        """Expose the mujoco simulation object."""
+        return self._env.sim
+
+    def get_camera_info(self, camera_name: str = "agentview") -> dict:
+        """
+        Get camera intrinsics and extrinsics for the specified camera.
+
+        Args:
+            camera_name: Name of the camera (without _image suffix).
+                         E.g., "agentview" or "robot0_eye_in_hand"
+
+        Returns:
+            dict with keys:
+                - 'intrinsic': 3x3 intrinsic matrix K
+                - 'camera_to_world': 4x4 transform from camera to world frame
+                - 'world_to_camera': 4x4 transform from world to camera frame
+                - 'image_height': image height in pixels
+                - 'image_width': image width in pixels
+        """
+        sim = self._env.sim
+
+        # Get intrinsic matrix
+        K = get_camera_intrinsic_matrix(
+            sim,
+            camera_name,
+            self.observation_height,
+            self.observation_width,
+        )
+
+        # Get extrinsic matrix (camera pose in world frame)
+        # This already includes the axis correction for OpenCV convention
+        T_world_camera = get_camera_extrinsic_matrix(sim, camera_name)
+
+        return {
+            "intrinsic": K,
+            "camera_to_world": T_world_camera,
+            "world_to_camera": pose_inv(T_world_camera),
+            "image_height": self.observation_height,
+            "image_width": self.observation_width,
+        }
 
 
 def _make_env_fns(

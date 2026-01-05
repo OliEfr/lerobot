@@ -50,6 +50,7 @@ import concurrent.futures as cf
 import json
 import logging
 import os
+import shutil
 import threading
 import time
 from collections import defaultdict
@@ -94,6 +95,22 @@ from lerobot.utils.utils import (
 )
 from lerobot.policies.diffusion.modeling_diffusion import RND
 
+VISUAL_SERVOING_SETTINGS = {
+    "1st_person": {
+        "lerobot_camera_name": "observation.images.image2",
+        "libero_camera_name": "robot0_eye_in_hand",
+        "depth_name": "observation.depths.depth2",
+        "servoing_fnc": "VS_first_person"
+    },
+    "3rd_person": {
+        "lerobot_camera_name": "observation.images.image",
+        "libero_camera_name": "agentview",
+        "depth_name": "observation.depths.depth",
+        "servoing_fnc": "VS_third_person",
+    }
+}
+use_visual_servoing_cam = "3rd_person"
+use_vs = True
 
 class SAM3StreamClient:
     """Client for streaming frames to SAM3 and receiving segmented frames via ZMQ."""
@@ -122,8 +139,9 @@ class SAM3StreamClient:
         self._last_frame_shape: tuple[int, ...] | None = None
         self._frame_counter = 0
         self._output_dir = output_dir
-        if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
+        if os.path.exists(output_dir):
+            shutil.rmtree(output_dir)
+        os.makedirs(output_dir)
 
         # Initialize ZMQ context and sockets
         self._context = zmq.Context()
@@ -145,7 +163,7 @@ class SAM3StreamClient:
 
         Handles PyTorch tensors in (B, C, H, W) format and converts to (H, W, C) uint8.
         """
-        tensor = observation["observation.images.image2"].cpu().numpy()
+        tensor = observation[VISUAL_SERVOING_SETTINGS[use_visual_servoing_cam]["lerobot_camera_name"]].cpu().numpy()
 
         # Remove batch dimension if present: (B, C, H, W) -> (C, H, W)
         if tensor.ndim == 4:
@@ -245,8 +263,12 @@ class SAM3StreamClient:
         self.close()
         return False
 
+debug_dir = "output_centroid_debug"
+if os.path.exists(debug_dir):
+    shutil.rmtree(debug_dir)
+os.makedirs(debug_dir)
 
-def compute_action_to_segmented_centroid(
+def VS_first_person(
     segmented_frame: np.ndarray,
     depth_observation: np.ndarray,
     current_ee_pos: np.ndarray | None = None,
@@ -335,6 +357,142 @@ def compute_action_to_segmented_centroid(
 
     return action
 
+def VS_third_person(
+    segmented_frame: np.ndarray,
+    depth_observation: np.ndarray,
+    camera_info: dict,
+    current_ee_pos: np.ndarray | None = None,
+    gain: float = 0.1,
+) -> np.ndarray:
+    """
+    Compute delta end-effector action to move towards the centroid of the segmented object.
+    Uses 3rd person camera with proper camera-to-world transformation.
+
+    Args:
+        segmented_frame: Binary segmentation mask from SAM3 (H, W), uint8.
+                         Non-zero pixels are the segmented object.
+        depth_observation: Depth image (B, H, W) or (H, W) in meters.
+        camera_info: Dict containing camera calibration from LiberoEnv.get_camera_info():
+            - 'intrinsic': 3x3 camera intrinsic matrix K
+            - 'camera_to_world': 4x4 transform from camera to world frame
+            - 'image_height': image height in pixels
+            - 'image_width': image width in pixels
+        current_ee_pos: Current end-effector position [x, y, z] in world frame.
+                        If None, returns target position scaled by gain.
+        gain: Proportional gain for the delta action (0-1).
+
+    Returns:
+        delta_action: np.ndarray of shape (7,) containing [dx, dy, dz, 0, 0, 0, gripper]
+    """
+    # Handle batch dimension in depth observation
+    if depth_observation.ndim > 2:
+        depth_observation = depth_observation[0]
+    assert depth_observation.shape[:2] == segmented_frame.shape[:2]
+
+    h, w = segmented_frame.shape[:2]
+
+    # Extract camera parameters
+    K = camera_info["intrinsic"]
+    camera_to_world = camera_info["camera_to_world"]
+
+    fx, fy = K[0, 0], K[1, 1]
+    cx, cy = K[0, 2], K[1, 2]
+
+    # Find centroid of the segmented region (in rotated image space)
+    moments = cv2.moments(segmented_frame)
+    if moments["m00"] < 1e-6:
+        # No segmented object found, return zero action
+        return np.zeros(7, dtype=np.float32)
+
+    centroid_u = moments["m10"] / moments["m00"]  # x pixel coordinate
+    centroid_v = moments["m01"] / moments["m00"]  # y pixel coordinate
+
+    # IMPORTANT: Account for the 180-degree rotation applied in libero.py
+    # The images are flipped with [::-1, ::-1], so we need to flip the coordinates back
+    centroid_u_original = w - 1 - centroid_u
+    centroid_v_original = h - 1 - centroid_v
+
+    # Sample depth at centroid (in the rotated image space, matching segmentation mask)
+    centroid_x_int = int(round(centroid_u))
+    centroid_y_int = int(round(centroid_v))
+
+    # Sample depth in 5x5 neighborhood and take median (robust to noise)
+    y_min = max(0, centroid_y_int - 2)
+    y_max = min(h, centroid_y_int + 3)
+    x_min = max(0, centroid_x_int - 2)
+    x_max = min(w, centroid_x_int + 3)
+
+    depth_patch = depth_observation[y_min:y_max, x_min:x_max]
+    valid_depths = depth_patch[depth_patch > 0]
+
+    if len(valid_depths) == 0:
+        # No valid depth, return zero action
+        return np.zeros(7, dtype=np.float32)
+
+    centroid_z = np.median(valid_depths)
+
+    # Convert pixel coordinates + depth to 3D camera coordinates
+    # Using pinhole camera model with ORIGINAL (un-rotated) coordinates
+    # Note: In camera frame, Z points forward (into the scene)
+    X_cam = (centroid_u_original - cx) * centroid_z / fx
+    Y_cam = (centroid_v_original - cy) * centroid_z / fy
+    Z_cam = centroid_z
+
+    # Point in camera frame (homogeneous)
+    point_camera = np.array([X_cam, Y_cam, Z_cam, 1.0])
+
+    # Transform to world frame
+    point_world = camera_to_world @ point_camera
+    target_pos_world = point_world[:3]
+
+    # Compute delta action
+    if current_ee_pos is not None:
+        # Compute direction from EE to target
+        delta = target_pos_world - current_ee_pos
+        # Apply gain
+        delta = delta * gain
+        # Clip maximum delta to prevent large jumps
+        max_delta = 0.05  # Maximum 5cm per step
+        delta_norm = np.linalg.norm(delta)
+        if delta_norm > max_delta:
+            delta = delta / delta_norm * max_delta
+    else:
+        # Return scaled target position as action (fallback)
+        assert False, "this delta computation is incorrect, I think."
+        delta = target_pos_world * gain
+
+    # Return action with zero rotations: [dx, dy, dz, 0, 0, 0, gripper]
+    action = np.zeros(7, dtype=np.float32)
+    action[:3] = delta
+
+    # Debug: save segmented_frame with centroid overlay and world coordinates
+    debug_img = cv2.cvtColor(segmented_frame * 255, cv2.COLOR_GRAY2BGR)
+    cv2.circle(debug_img, (centroid_x_int, centroid_y_int), 5, (0, 0, 255), -1)
+    # Add text showing world coordinates
+    cv2.putText(
+        debug_img,
+        f"World: ({target_pos_world[0]:.3f}, {target_pos_world[1]:.3f}, {target_pos_world[2]:.3f})",
+        (10, 20),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.4,
+        (0, 255, 0),
+        1,
+    )
+    if current_ee_pos is not None:
+        cv2.putText(
+            debug_img,
+            f"EE: ({current_ee_pos[0]:.3f}, {current_ee_pos[1]:.3f}, {current_ee_pos[2]:.3f})",
+            (10, 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.4,
+            (255, 0, 0),
+            1,
+        )
+    frame_idx = len(os.listdir(debug_dir))
+    cv2.imwrite(os.path.join(debug_dir, f"segmented_frame_{frame_idx:05d}.png"), debug_img)
+
+    return action
+
 
 def rollout(
     env: gym.vector.VectorEnv,
@@ -389,7 +547,11 @@ def rollout(
         max_steps = 300
 
     # Initialize SAM3 streaming client for segmentation
-    sam3_client = SAM3StreamClient()
+    if use_vs:
+        sam3_client = SAM3StreamClient()
+
+        # Get camera info from first environment (assumes all envs have same camera setup)
+        camera_info = env.envs[0].get_camera_info(VISUAL_SERVOING_SETTINGS[use_visual_servoing_cam]["libero_camera_name"])
 
     # Reset the policy and environments.
     policy.reset()
@@ -403,6 +565,7 @@ def rollout(
     all_successes = []
     all_dones = []
     action = torch.zeros((1,7))
+    segmented_frame = None
 
     step = 0
     # Keep track of which environments are done.
@@ -424,32 +587,53 @@ def rollout(
             all_observations.append(deepcopy(observation))
             
         # Send RGB observation to SAM3 and receive segmented frame
-        sam3_client.send_frame(observation)
-        segmented_frame = sam3_client.receive_segmented_frame()
+        if use_vs:
+            sam3_client.send_frame(observation)
+            segmented_frame = sam3_client.receive_segmented_frame()
 
         # Compute action from segmented centroid only when new segmented frame is received
         if segmented_frame is not None:
-            depth_key = "observation.depths.depth2"
+            depth_key = VISUAL_SERVOING_SETTINGS[use_visual_servoing_cam]["depth_name"]
             depth_obs = observation[depth_key].cpu().numpy()
 
-            # Compute action to move towards segmented object centroid
-            action_np = compute_action_to_segmented_centroid(
-                segmented_frame=segmented_frame,
-                depth_observation=depth_obs,
-                current_ee_pos=None,  # Could extract from observation if available
-                camera_intrinsics=None,  # Uses defaults
-                gain=1,
-            )
+
+            servoing_fnc = globals()[VISUAL_SERVOING_SETTINGS[use_visual_servoing_cam]["servoing_fnc"]]
+
+            if use_visual_servoing_cam == "3rd_person":
+                current_ee_pos = None
+                if "observation.state" in observation:
+                    state = observation["observation.state"].cpu().numpy()[0]
+                    current_ee_pos = state[:3]  # First 3 elements are EE position
+
+                action_np = servoing_fnc(
+                    segmented_frame=segmented_frame,
+                    depth_observation=depth_obs,
+                    camera_info=camera_info,
+                    current_ee_pos=current_ee_pos,
+                    gain=1.0,
+                )
+            elif use_visual_servoing_cam == "1st_person":
+                action_np = servoing_fnc(
+                    segmented_frame=segmented_frame,
+                    depth_observation=depth_obs,
+                    current_ee_pos=None,  # Could extract from observation if available
+                    camera_intrinsics=None,  # Uses defaults
+                    gain=3,
+                )
+            else:
+                raise ValueError(f"Unknown visual servoing camera: {use_visual_servoing_cam}")
             action = torch.from_numpy(action_np).unsqueeze(0)  # Add batch dim
 
-        # Infer "task" from attributes of environments.
-        # TODO: works with SyncVectorEnv but not AsyncVectorEnv
-        observation = add_envs_task(env, observation)
-        # here needs to go additinoal data augmentation if any
-        observation = preprocessor(observation)
-        with torch.inference_mode():
-            action = policy.select_action(observation)
-        action = postprocessor(action)
+
+        if not use_vs:
+            # Infer "task" from attributes of environments.
+            # TODO: works with SyncVectorEnv but not AsyncVectorEnv
+            observation = add_envs_task(env, observation)
+            # here needs to go additinoal data augmentation if any
+            observation = preprocessor(observation)
+            with torch.inference_mode():
+                action = policy.select_action(observation)
+            action = postprocessor(action)
         if rnd_path:
             rnd_score = policy.predict_rnd(observation)
             rnd_scores.append(float(rnd_score))
@@ -554,7 +738,8 @@ def rollout(
         policy.use_original_modules()
 
     # Cleanup SAM3 client
-    sam3_client.close()
+    if use_vs:
+        sam3_client.close()
 
     return ret
 
