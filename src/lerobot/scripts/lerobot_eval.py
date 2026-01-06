@@ -63,7 +63,9 @@ from pathlib import Path
 from pprint import pformat
 from typing import Any, TypedDict
 import cv2
+from PIL import Image
 import zmq
+import msgpack
 
 import einops
 import gymnasium as gym
@@ -109,8 +111,11 @@ VISUAL_SERVOING_SETTINGS = {
         "servoing_fnc": "VS_third_person",
     }
 }
-use_visual_servoing_cam = "1st_person"
-use_vs = True
+use_visual_servoing_cam = "1st_person" # set 'None' to not use vs
+
+first_person_gripper_mask_img = Image.open("lerobot_first_person_cam_gripper_mask_expanded_2.png").convert('L')
+first_person_gripper_mask = np.array(first_person_gripper_mask_img)
+first_person_gripper_mask = (first_person_gripper_mask < 128)
 
 class SAM3StreamClient:
     """Client for streaming frames to SAM3 and receiving segmented frames via ZMQ."""
@@ -180,7 +185,7 @@ class SAM3StreamClient:
 
         return image_batch
 
-    def send_frame_batched(self, observation: dict) -> bool:
+    def send_frame_batched(self, observation: dict, is_first_frame: bool) -> bool:
         """
         Send batched RGB frames from observation to SAM3.
 
@@ -212,11 +217,25 @@ class SAM3StreamClient:
             rgb_batch = rgb_batch.astype(np.uint8)
         rgb_batch = np.ascontiguousarray(rgb_batch)
 
+        # Pack message with msgpack
+        msg = msgpack.packb({
+            "prompt": "yellow and white cup",
+            "is_first_frame": is_first_frame,
+            "frames": rgb_batch.tobytes(),
+        }, use_bin_type=True)
+
         try:
-            self._sender.send(rgb_batch.tobytes(), zmq.NOBLOCK)
+            self._sender.send(msg, zmq.NOBLOCK)
             return True
         except zmq.Again:
             return False  # Skip if send would block
+        
+    def send_model_reset(self):
+        """Send model reset signal to SAM3."""
+        msg = msgpack.packb({
+            "reset_model": True,
+        }, use_bin_type=True)
+        self._sender.send(msg)
 
     def receive_segmented_frame(self) -> dict[str, np.ndarray] | None:
         """
@@ -360,7 +379,7 @@ def VS_first_person(
 
     # Return action with zero rotations: [dx, dy, dz, 0, 0, 0, gripper]
     action = np.zeros(7, dtype=np.float32)
-    action[:3] = target_pos
+    action[:3] = gain * target_pos
     
     # Debug: save segmented_frame with centroid overlay
     os.makedirs(debug_dir, exist_ok=True)
@@ -468,7 +487,7 @@ def VS_third_person(
         # Apply gain
         delta = delta * gain
         # Clip maximum delta to prevent large jumps
-        max_delta = 0.05  # Maximum 5cm per step
+        max_delta = 0.1  # Maximum 5cm per step
         delta_norm = np.linalg.norm(delta)
         if delta_norm > max_delta:
             delta = delta / delta_norm * max_delta
@@ -551,6 +570,8 @@ def rollout(
         The dictionary described above.
     """
     assert isinstance(policy, nn.Module), "Policy must be a PyTorch nn module."
+    use_vs = True
+    segmented_frames = None
     
     rnd_path = None # "outputs/train/2025-12-15/15-09-16_pusht_diffusion_fine_l1_RND_OOD/rnd/rnd.pth"
     if rnd_path:
@@ -581,7 +602,6 @@ def rollout(
     all_successes = []
     all_dones = []
     action = torch.zeros((1,7))
-    segmented_frame = None
 
     step = 0
     # Keep track of which environments are done.
@@ -604,14 +624,12 @@ def rollout(
             
         # Send RGB observation to SAM3 and receive segmented frame
         if use_vs:
-            sam3_client.send_frame_batched(observation)
+            sam3_client.send_frame_batched(observation, is_first_frame=(step==0))
             segmented_frames = sam3_client.receive_segmented_frame()
-            # Extract the mask for the visual servoing camera
-            if segmented_frames is not None:
-                segmented_frame = segmented_frames.get(use_visual_servoing_cam)
+
 
         # Compute action from segmented centroid only when new segmented frame is received
-        if segmented_frame is not None:
+        if segmented_frames is not None and use_vs:
             depth_key = VISUAL_SERVOING_SETTINGS[use_visual_servoing_cam]["depth_name"]
             depth_obs = observation[depth_key].cpu().numpy()
 
@@ -625,24 +643,32 @@ def rollout(
                     current_ee_pos = state[:3]  # First 3 elements are EE position
 
                 action_np = servoing_fnc(
-                    segmented_frame=segmented_frame,
+                    segmented_frame=segmented_frames.get(use_visual_servoing_cam),
                     depth_observation=depth_obs,
                     camera_info=camera_info,
                     current_ee_pos=current_ee_pos,
-                    gain=1.0,
+                    gain=4.0,
                 )
             elif use_visual_servoing_cam == "1st_person":
                 action_np = servoing_fnc(
-                    segmented_frame=segmented_frame,
+                    segmented_frame=segmented_frames.get(use_visual_servoing_cam),
                     depth_observation=depth_obs,
                     current_ee_pos=None,  # Could extract from observation if available
                     camera_intrinsics=None,  # Uses defaults
-                    gain=3,
+                    gain=2,
                 )
             else:
                 raise ValueError(f"Unknown visual servoing camera: {use_visual_servoing_cam}")
             action = torch.from_numpy(action_np).unsqueeze(0)  # Add batch dim
 
+            # check if object is close enough to stop visual servoing
+            depth_obs = observation[VISUAL_SERVOING_SETTINGS["1st_person"]["depth_name"]][0,...,0].cpu().numpy()
+            depth_obs_mask = (segmented_frames["1st_person"] > 0) & first_person_gripper_mask
+            object_depths = depth_obs[depth_obs_mask]
+            if  object_depths.min() < 0.15:
+                    print("Object is close enough, stopping visual servoing.")
+                    use_vs = False
+                    sam3_client.send_model_reset()
 
         if not use_vs:
             # Infer "task" from attributes of environments.
@@ -757,7 +783,7 @@ def rollout(
         policy.use_original_modules()
 
     # Cleanup SAM3 client
-    if use_vs:
+    if 'sam3_client' in locals():
         sam3_client.close()
 
     return ret

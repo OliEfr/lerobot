@@ -6,9 +6,11 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 # --- Configuration ---
 # Update these paths to your local environment
+dataset_save_name = "libero_10_id4_pick_50_2"
+
 INPUT_H5 = Path("/home/admin_07/project_repos/LIBERO/libero/datasets/libero_10_regenerated_openvla/demo.hdf5")
-OUTPUT_PATH = Path("./libero_datasets/libero_10_id4")
-REPO_ID = "OliverHausdoerfer/libero_10"
+OUTPUT_PATH = Path(f"./libero_datasets/{dataset_save_name}")
+REPO_ID = f"OliverHausdoerfer/{dataset_save_name}"
 FPS = 20
 
 LIBERO_FEATURES = {
