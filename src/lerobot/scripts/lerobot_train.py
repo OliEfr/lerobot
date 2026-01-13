@@ -208,6 +208,9 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     if not is_main_process:
         dataset = make_dataset(cfg)
 
+    # Get dataset tasks
+    cfg.policy.tasks = dataset.meta.tasks.to_dict()["task_index"]
+
     # Create environment used for evaluating checkpoints during training on simulation data.
     # On real-world data, no need to create an environment as evaluations are done outside train.py,
     # using the eval.py instead, with gym_dora environment and dora-rs.
@@ -298,9 +301,15 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         libero_stats = analyze_dataset_tasks(dataset, output_dir="libero_dataset_stats")
 
     # create dataloader for offline training
-    if hasattr(cfg.policy, "drop_n_last_frames"):
-        assert not "libero_stats" in locals(), "Still need to handle this case."
-
+    shuffle = True
+    sampler = None
+    if "libero_stats" in locals():
+            assert cfg.policy.drop_n_last_frames == 0, "This sampler does not yet handle drop_n_last_frames"
+            # This is a sampler that only retrieves episodes from a libero dataset corresponding to the task_to_solve
+            sample_idx_to_use = libero_stats["task_to_indices"][cfg.task_to_solve]
+            sampler = SubsetRandomSampler(sample_idx_to_use)
+            shuffle = False # SubsetRandomSampler shuffles by default already
+    elif hasattr(cfg.policy, "drop_n_last_frames"):
         shuffle = False
         sampler = EpisodeAwareSampler(
             dataset.meta.episodes["dataset_from_index"],
@@ -308,15 +317,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             drop_n_last_frames=cfg.policy.drop_n_last_frames,
             shuffle=True,
         )
-    else:
-        shuffle = True
-        sampler = None
-        if "libero_stats" in locals():
-            # This is a sampler that only retrieves episodes from a libero dataset corresponding to the task_to_solve
-            sample_idx_to_use = libero_stats["task_to_indices"][cfg.task_to_solve]
-            sampler = SubsetRandomSampler(sample_idx_to_use)
-            shuffle = False # SubsetRandomSampler shuffles by default already
 
+        
     dataloader = torch.utils.data.DataLoader(
         dataset,
         num_workers=cfg.num_workers,
@@ -434,7 +436,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         torch.save(policy.diffusion.rnd.state_dict(), rnd_save_dir / "rnd.pth")
 
 
-    if cfg.policy.train_only_rnd:
+    if hasattr(cfg.policy, "train_only_rnd") and cfg.policy.train_only_rnd:
         assert cfg.policy.use_rnd, "train_only_rnd requires use_rnd to be True"
         return
 

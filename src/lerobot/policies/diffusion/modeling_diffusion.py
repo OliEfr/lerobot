@@ -42,7 +42,7 @@ from lerobot.policies.utils import (
     get_output_shape,
     populate_queues,
 )
-from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGES, OBS_STATE
+from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGES, OBS_STATE, OBS_LANGUAGE, TASK_ONEHOT_LOOKUP, OBS_TASK_IDS
 
 
 class DiffusionPolicy(PreTrainedPolicy):
@@ -89,6 +89,8 @@ class DiffusionPolicy(PreTrainedPolicy):
             self._queues[OBS_IMAGES] = deque(maxlen=self.config.n_obs_steps)
         if self.config.env_state_feature:
             self._queues[OBS_ENV_STATE] = deque(maxlen=self.config.n_obs_steps)
+        if self.config.task_id_feature:
+            self._queues[OBS_TASK_IDS] = deque(maxlen=self.config.n_obs_steps)
 
     @torch.no_grad()
     def predict_action_chunk(self, batch: dict[str, Tensor], noise: Tensor | None = None) -> Tensor:
@@ -209,12 +211,22 @@ class DiffusionModel(nn.Module):
                 global_cond_dim += self.rgb_encoder.feature_dim * num_images
         if self.config.env_state_feature:
             global_cond_dim += self.config.env_state_feature.shape[0]
+        if self.config.task_id_feature:
+            global_cond_dim += self.config.task_id_feature.shape[0]
         assert global_cond_dim > 0, "No observation features provided"
 
         self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps)
         
         if self.config.use_rnd:
             self.rnd = RND(config)
+
+        # Store task descriptions and one-hot encodings in model
+        # NOTE this is legacy and should not be used / required. This config should be saved to disk as json together with the other config params.
+        if self.config.task_id_feature is not None:
+            assert self.config.task_id_feature.shape[0] <= TASK_ONEHOT_LOOKUP.shape[1], "Task ID feature shape exceeds one-hot lookup table size."
+            for task, task_id in self.config.tasks.items():
+                # Clone to avoid shared storage across buffers
+                self.register_buffer(f'tasks_{task}', TASK_ONEHOT_LOOKUP[task_id].clone())
 
         self.noise_scheduler = _make_noise_scheduler(
             config.noise_scheduler_type,
@@ -231,9 +243,27 @@ class DiffusionModel(nn.Module):
             self.num_inference_steps = self.noise_scheduler.config.num_train_timesteps
         else:
             self.num_inference_steps = config.num_inference_steps
-                
+
         # self.loss_weight_mean = None
         # self.loss_scales = None
+
+    # NOTE this is legacy and should not be used / required. This config should be saved to disk as json together with the other config params.
+    def recover_task_dict(self):
+        recovered_dict = {}
+
+        # .named_buffers() yields (name, tensor)
+        for name, buffer in self.named_buffers():
+            if name.startswith("tasks_"):
+                # Remove the prefix to get the original task name
+                task_name = name.replace("tasks_", "")
+
+                # Find the index of the 1.0 (the task_id)
+                # .item() converts a single-value tensor to a Python int
+                task_id = torch.argmax(buffer).item()
+
+                recovered_dict[task_name] = task_id
+
+        return recovered_dict
             
     # ========= inference  ============
     def conditional_sample(
@@ -285,7 +315,6 @@ class DiffusionModel(nn.Module):
 
             threshold = 0.0003
             ood_mask = (ood <= threshold).float().view(-1,1,1)
-            print(ood_mask.mean())
 
             for f in self.rnd.rnd_features:
                 batch[f] = batch[f] * ood_mask
@@ -322,6 +351,17 @@ class DiffusionModel(nn.Module):
 
         if self.config.env_state_feature:
             global_cond_feats.append(batch[OBS_ENV_STATE])
+
+        if self.config.task_id_feature:
+            # assumes hard coded number of tasks from constants.py
+            tasks_one_hot = TASK_ONEHOT_LOOKUP[batch[OBS_TASK_IDS]]
+            
+            # During trainig, we need to repeat the one-hot for each obs step, during inference, we already have it repeated due to the queues
+            if not tasks_one_hot.shape[:2] == img_features.shape[:2]:
+                tasks_one_hot =tasks_one_hot.unsqueeze(1).repeat(1, n_obs_steps, 1)
+            
+            global_cond_feats.append(tasks_one_hot)
+
 
         # Concatenate features then flatten to (B, global_cond_dim).
         return torch.cat(global_cond_feats, dim=-1).flatten(start_dim=1)

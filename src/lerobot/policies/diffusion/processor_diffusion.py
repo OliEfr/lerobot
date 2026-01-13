@@ -28,6 +28,7 @@ from lerobot.processor import (
     RenameObservationsProcessorStep,
     UnnormalizerProcessorStep,
     PartialGreenTCoverProcessorStep,
+    AddTaskToObservationProcessor,
     AutoImageResizeProcessorStep,
 )
 from lerobot.processor.converters import policy_action_to_transition, transition_to_policy_action
@@ -69,8 +70,9 @@ def make_diffusion_pre_post_processors(
     if config.partial_green_t_cover_processor:
         input_steps.append(PartialGreenTCoverProcessorStep())
 
-    input_steps.append(AutoImageResizeProcessorStep(input_features=list(config.input_features.keys())
-)) # pass as list, otherwise not serializable for saving
+    # input_steps.append(
+    #     AutoImageResizeProcessorStep(input_features=list(config.input_features.keys()))
+    # )  # pass as list, otherwise not serializable for saving
     input_steps.append(RenameObservationsProcessorStep(rename_map={}))
     input_steps.append(AddBatchDimensionProcessorStep())
     input_steps.append(DeviceProcessorStep(device=config.device))
@@ -79,6 +81,7 @@ def make_diffusion_pre_post_processors(
         norm_map=config.normalization_mapping,
         stats=dataset_stats,
     ))
+    input_steps.append(AddTaskToObservationProcessor())
 
     output_steps = [
         UnnormalizerProcessorStep(

@@ -78,6 +78,7 @@ from .rename_processor import RenameObservationsProcessorStep
 from .partialGreenTCover_processor import PartialGreenTCoverProcessorStep
 from .images import AutoImageResizeProcessorStep
 from .tokenizer_processor import TokenizerProcessorStep
+from .add_task_to_observation_processor import AddTaskToObservationProcessor
 
 __all__ = [
     "ActionProcessorStep",
@@ -118,6 +119,7 @@ __all__ = [
     "RobotObservation",
     "RenameObservationsProcessorStep",
     "PartialGreenTCoverProcessorStep",
+    "AddTaskToObservationProcessor",
     "AutoImageResizeProcessorStep",
     "RewardClassifierProcessorStep",
     "RewardProcessorStep",

@@ -140,6 +140,20 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):  # type: igno
     @property
     def image_features(self) -> dict[str, PolicyFeature]:
         return {key: ft for key, ft in self.input_features.items() if ft.type is FeatureType.VISUAL}
+    
+    @property
+    def task_language_feature(self) -> PolicyFeature | None:
+        for _, ft in self.input_features.items():
+            if ft.type is FeatureType.LANGUAGE:
+                return ft
+        return None
+    
+    @property
+    def task_id_feature(self) -> PolicyFeature | None:
+        for _, ft in self.input_features.items():
+            if ft.type is FeatureType.TASK_ID:
+                return ft
+        return None
 
     @property
     def action_feature(self) -> PolicyFeature | None:
