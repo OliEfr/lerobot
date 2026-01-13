@@ -15,6 +15,8 @@
 import os
 from pathlib import Path
 import torch
+from PIL import Image
+import numpy as np
 
 from huggingface_hub.constants import HF_HOME
 
@@ -106,3 +108,9 @@ VISUAL_SERVOING_SETTINGS = {
         "servoing_fnc": "VS_third_person",
     }
 }
+
+first_person_gripper_mask_img = Image.open("lerobot_first_person_cam_gripper_mask_expanded_2.png").convert(
+    "L"
+)
+first_person_gripper_mask = np.array(first_person_gripper_mask_img)
+first_person_gripper_mask = first_person_gripper_mask < 128
