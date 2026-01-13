@@ -14,6 +14,7 @@
 # keys
 import os
 from pathlib import Path
+import torch
 
 from huggingface_hub.constants import HF_HOME
 
@@ -26,6 +27,7 @@ OBS_IMAGES = OBS_IMAGE + "s"
 OBS_DEPTH = OBS_STR + ".depth"
 OBS_DEPTHS = OBS_DEPTH + "s"
 OBS_LANGUAGE = OBS_STR + ".language"
+OBS_TASK_IDS = OBS_STR + ".task_ids"
 OBS_LANGUAGE_TOKENS = OBS_LANGUAGE + ".tokens"
 OBS_LANGUAGE_ATTENTION_MASK = OBS_LANGUAGE + ".attention_mask"
 
@@ -85,3 +87,22 @@ COVER_GREEN_T_START_X_STATE = int(COVER_GREEN_T_START_X_VIS * VIS_TO_STATE_SCALE
 COVER_GREEN_T_START_Y_STATE = int(COVER_GREEN_T_START_Y_VIS * VIS_TO_STATE_SCALE)
 COVER_GREEN_T_END_X_STATE = int(COVER_GREEN_T_END_X_VIS * VIS_TO_STATE_SCALE)
 COVER_GREEN_T_END_Y_STATE = int(COVER_GREEN_T_END_Y_VIS * VIS_TO_STATE_SCALE)
+
+NUM_TASKS = 5 # hardcoded for now; determines size of one-hot vector
+TASK_ONEHOT_LOOKUP = torch.eye(NUM_TASKS, dtype=torch.float32, device="cuda")
+
+# Visual servoing camera settings
+VISUAL_SERVOING_SETTINGS = {
+    "1st_person": {
+        "lerobot_camera_name": "observation.images.image2",
+        "libero_camera_name": "robot0_eye_in_hand",
+        "depth_name": "observation.depths.depth2",
+        "servoing_fnc": "VS_first_person"
+    },
+    "3rd_person": {
+        "lerobot_camera_name": "observation.images.image",
+        "libero_camera_name": "agentview",
+        "depth_name": "observation.depths.depth",
+        "servoing_fnc": "VS_third_person",
+    }
+}

@@ -1,0 +1,38 @@
+<<: !include envs/pusht_fine.yaml
+job_name: pusht_ditflow_fine
+steps: 100_000
+save_freq: 100_000
+eval_freq: 5_000
+eval:
+  n_episodes: 500
+  max_episodes_rendered: 0
+log_freq: 500
+batch_size: 512
+num_workers: 20
+dataset:
+  drop_columns: ["observation.image"]
+  repo_id: pusht_merged_300_fine
+  root: pusht_teleop_data/pusht_merged_300_fine
+  image_transforms:
+    enable: false
+wandb:
+  enable: true
+  project: policies
+rename_map: # Hack: this needs to be set in order to pass validate_visual_features_consistency when not having image inputs.
+  dummy: dummy
+policy:
+  repo_id: OliverHausdoerfer/diffusion_pusht_v1
+  type: ditflow
+  optimizer_lr: 0.00002
+  crop_is_random: False
+  input_features:
+    observation.state:
+      type: STATE
+      shape:
+        - 2
+    observation.environment_state:
+      type: ENV
+      shape:
+        - 16
+  use_separate_rgb_encoder_per_camera: true
+  crop_shape: [400, 400]

@@ -1,0 +1,25 @@
+job_name: lerobot_train_smolvla
+steps: 50_000
+save_freq: 50_000
+eval_freq: 10_000
+batch_size: 32
+eval:
+  batch_size: 1
+  n_episodes: 10
+policy:
+  type: smolvla
+  load_vlm_weights: true
+  scheduler_decay_steps: 55_000
+  push_to_hub: false
+  optimizer_lr: 1e-3
+dataset:
+ repo_id: "HuggingFaceVLA/libero"
+ image_transforms:
+   enable: false
+env:
+  type: libero
+  task: libero_10
+  task_ids: [4]
+wandb:
+  enable: true
+  project: policies_lerobot_smolvla_libero

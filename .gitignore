@@ -181,5 +181,6 @@ outputs/
 libero_dataset_stats
 pusht_teleop_data
 output_sam3
+output_centroid_debug
 
 libero_datasets

@@ -63,7 +63,6 @@ from pathlib import Path
 from pprint import pformat
 from typing import Any, TypedDict
 import cv2
-from PIL import Image
 import zmq
 import msgpack
 
@@ -96,26 +95,12 @@ from lerobot.utils.utils import (
     inside_slurm,
 )
 from lerobot.policies.diffusion.modeling_diffusion import RND
+from lerobot.utils.constants import VISUAL_SERVOING_SETTINGS
+import system2 as system2_module
 
-VISUAL_SERVOING_SETTINGS = {
-    "1st_person": {
-        "lerobot_camera_name": "observation.images.image2",
-        "libero_camera_name": "robot0_eye_in_hand",
-        "depth_name": "observation.depths.depth2",
-        "servoing_fnc": "VS_first_person"
-    },
-    "3rd_person": {
-        "lerobot_camera_name": "observation.images.image",
-        "libero_camera_name": "agentview",
-        "depth_name": "observation.depths.depth",
-        "servoing_fnc": "VS_third_person",
-    }
-}
-use_visual_servoing_cam = "1st_person" # set 'None' to not use vs
+SAVE_FRAMES = True
 
-first_person_gripper_mask_img = Image.open("lerobot_first_person_cam_gripper_mask_expanded_2.png").convert('L')
-first_person_gripper_mask = np.array(first_person_gripper_mask_img)
-first_person_gripper_mask = (first_person_gripper_mask < 128)
+
 
 class SAM3StreamClient:
     """Client for streaming frames to SAM3 and receiving segmented frames via ZMQ."""
@@ -185,12 +170,14 @@ class SAM3StreamClient:
 
         return image_batch
 
-    def send_frame_batched(self, observation: dict, is_first_frame: bool) -> bool:
+    def send_frame_batched(self, observation: dict, sam3_stage: int, prompt: str | None = None) -> bool:
         """
         Send batched RGB frames from observation to SAM3.
 
         Args:
             observation: Observation dict containing RGB images.
+            sam3_stage: SAM3 stage counter. Server resets when this increases.
+            prompt: Optional prompt for this stage. If None, uses empty string.
 
         Returns:
             True if frames were sent, False otherwise.
@@ -217,10 +204,13 @@ class SAM3StreamClient:
             rgb_batch = rgb_batch.astype(np.uint8)
         rgb_batch = np.ascontiguousarray(rgb_batch)
 
+        # Use provided prompt or empty string
+        actual_prompt = prompt if prompt is not None else ""
+
         # Pack message with msgpack
         msg = msgpack.packb({
-            "prompt": "yellow and white cup",
-            "is_first_frame": is_first_frame,
+            "prompt": actual_prompt,
+            "sam3_stage": sam3_stage,
             "frames": rgb_batch.tobytes(),
         }, use_bin_type=True)
 
@@ -230,12 +220,32 @@ class SAM3StreamClient:
         except zmq.Again:
             return False  # Skip if send would block
         
+
     def send_model_reset(self):
         """Send model reset signal to SAM3."""
         msg = msgpack.packb({
             "reset_model": True,
         }, use_bin_type=True)
         self._sender.send(msg)
+
+    def drain_stale_messages(self) -> int:
+        """Drain any stale messages from the receive buffer.
+
+        This should be called at episode start to clear messages from previous episodes
+        that may be buffered due to ZMQ CONFLATE setting.
+
+        Returns:
+            Number of messages drained.
+        """
+        count = 0
+        while True:
+            try:
+                self._receiver.recv(zmq.NOBLOCK)
+                count += 1
+            except zmq.Again:
+                break
+        self.latest_segmented_frame = None
+        return count
 
     def receive_segmented_frame(self) -> dict[str, np.ndarray] | None:
         """
@@ -273,7 +283,7 @@ class SAM3StreamClient:
                 result[cam_name] = mask
 
                 # Save received masks for debugging
-                if self._output_dir:
+                if self._output_dir and SAVE_FRAMES:
                     path = os.path.join(self._output_dir, f"frame_{cam_name}_{self._frame_counter:05d}.png")
                     frame_to_save = cv2.cvtColor(mask * 255, cv2.COLOR_GRAY2BGR)
                     cv2.imwrite(path, frame_to_save)
@@ -386,9 +396,10 @@ def VS_first_person(
     debug_img = cv2.cvtColor(segmented_frame * 255, cv2.COLOR_GRAY2BGR)
     cv2.circle(debug_img, (int(centroid_x), int(centroid_y)), 5, (0, 0, 255), -1)
     frame_idx = len(os.listdir(debug_dir))
-    cv2.imwrite(
-        os.path.join(debug_dir, f"segmented_frame_{frame_idx:05d}.png"), debug_img
-    )
+    if SAVE_FRAMES:
+        cv2.imwrite(
+            os.path.join(debug_dir, f"segmented_frame_{frame_idx:05d}.png"), debug_img
+        )
 
     return action
 
@@ -479,6 +490,7 @@ def VS_third_person(
     # Transform to world frame
     point_world = camera_to_world @ point_camera
     target_pos_world = point_world[:3]
+    target_pos_world[-1] -= 0.05 # somehow the tf is not correct and I manually adjust; fix later.
 
     # Compute delta action
     if current_ee_pos is not None:
@@ -500,31 +512,32 @@ def VS_third_person(
     action = np.zeros(7, dtype=np.float32)
     action[:3] = delta
 
-    # Debug: save segmented_frame with centroid overlay and world coordinates
-    debug_img = cv2.cvtColor(segmented_frame * 255, cv2.COLOR_GRAY2BGR)
-    cv2.circle(debug_img, (centroid_x_int, centroid_y_int), 5, (0, 0, 255), -1)
-    # Add text showing world coordinates
-    cv2.putText(
-        debug_img,
-        f"World: ({target_pos_world[0]:.3f}, {target_pos_world[1]:.3f}, {target_pos_world[2]:.3f})",
-        (10, 20),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.4,
-        (0, 255, 0),
-        1,
-    )
-    if current_ee_pos is not None:
+    if SAVE_FRAMES:
+        # Debug: save segmented_frame with centroid overlay and world coordinates
+        debug_img = cv2.cvtColor(segmented_frame * 255, cv2.COLOR_GRAY2BGR)
+        cv2.circle(debug_img, (centroid_x_int, centroid_y_int), 5, (0, 0, 255), -1)
+        # Add text showing world coordinates
         cv2.putText(
             debug_img,
-            f"EE: ({current_ee_pos[0]:.3f}, {current_ee_pos[1]:.3f}, {current_ee_pos[2]:.3f})",
-            (10, 40),
+            f"World: ({target_pos_world[0]:.3f}, {target_pos_world[1]:.3f}, {target_pos_world[2]:.3f})",
+            (10, 20),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.4,
-            (255, 0, 0),
+            (0, 255, 0),
             1,
         )
-    frame_idx = len(os.listdir(debug_dir))
-    cv2.imwrite(os.path.join(debug_dir, f"segmented_frame_{frame_idx:05d}.png"), debug_img)
+        if current_ee_pos is not None:
+            cv2.putText(
+                debug_img,
+                f"EE: ({current_ee_pos[0]:.3f}, {current_ee_pos[1]:.3f}, {current_ee_pos[2]:.3f})",
+                (10, 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.4,
+                (255, 0, 0),
+                1,
+            )
+        frame_idx = len(os.listdir(debug_dir))
+        cv2.imwrite(os.path.join(debug_dir, f"segmented_frame_{frame_idx:05d}.png"), debug_img)
 
     return action
 
@@ -570,7 +583,6 @@ def rollout(
         The dictionary described above.
     """
     assert isinstance(policy, nn.Module), "Policy must be a PyTorch nn module."
-    use_vs = True
     segmented_frames = None
     
     rnd_path = None # "outputs/train/2025-12-15/15-09-16_pusht_diffusion_fine_l1_RND_OOD/rnd/rnd.pth"
@@ -583,16 +595,18 @@ def rollout(
         rnd_scores = []
         max_steps = 300
 
+    system2 = system2_module.System2()
     # Initialize SAM3 streaming client for segmentation
-    if use_vs:
+    if system2.has_sam3_stage():
         sam3_client = SAM3StreamClient()
-
-        # Get camera info from first environment (assumes all envs have same camera setup)
-        camera_info = env.envs[0].get_camera_info(VISUAL_SERVOING_SETTINGS[use_visual_servoing_cam]["libero_camera_name"])
 
     # Reset the policy and environments.
     policy.reset()
     observation, info = env.reset(seed=seeds)
+
+    # Reset System2 for new episode
+    system2.reset()
+
     if render_callback is not None:
         render_callback(env)
 
@@ -623,57 +637,80 @@ def rollout(
             all_observations.append(deepcopy(observation))
             
         # Send RGB observation to SAM3 and receive segmented frame
-        if use_vs:
-            sam3_client.send_frame_batched(observation, is_first_frame=(step==0))
+        if system2.has_sam3_stage():
+            # Reset SAM3 at episode start
+            if step == 0:
+                sam3_client.send_model_reset()
+                sam3_client.drain_stale_messages()
+
+            current_stage = system2.get_current_stage()
+            sam3_client.send_frame_batched(
+                observation,
+                sam3_stage=current_stage.sam3_stage,
+                prompt=current_stage.sam3_prompt
+            )
             segmented_frames = sam3_client.receive_segmented_frame()
 
+        # Check System2 stage advancement every step (independent of SAM3)
+        _ = system2.check_and_advance(
+            observation=observation,
+            segmented_frames=segmented_frames,
+        )
 
-        # Compute action from segmented centroid only when new segmented frame is received
-        if segmented_frames is not None and use_vs:
-            depth_key = VISUAL_SERVOING_SETTINGS[use_visual_servoing_cam]["depth_name"]
+        # Determine mode from current stage
+        current_stage = system2.get_current_stage()
+
+        # Compute vs action
+        if current_stage.mode == "sam3" and segmented_frames is not None:
+            # Get camera from current stage
+            stage_camera = current_stage.vs_camera
+            if stage_camera is None:
+                raise ValueError("SAM3 stage must have a camera specified")
+
+            depth_key = VISUAL_SERVOING_SETTINGS[stage_camera]["depth_name"]
             depth_obs = observation[depth_key].cpu().numpy()
 
+            servoing_fnc = globals()[VISUAL_SERVOING_SETTINGS[stage_camera]["servoing_fnc"]]
 
-            servoing_fnc = globals()[VISUAL_SERVOING_SETTINGS[use_visual_servoing_cam]["servoing_fnc"]]
+            if stage_camera == "3rd_person":
+                # Query camera_info dynamically for this stage's camera
+                camera_info = env.envs[0].get_camera_info(
+                    VISUAL_SERVOING_SETTINGS[stage_camera]["libero_camera_name"]
+                )
 
-            if use_visual_servoing_cam == "3rd_person":
                 current_ee_pos = None
                 if "observation.state" in observation:
                     state = observation["observation.state"].cpu().numpy()[0]
                     current_ee_pos = state[:3]  # First 3 elements are EE position
 
                 action_np = servoing_fnc(
-                    segmented_frame=segmented_frames.get(use_visual_servoing_cam),
+                    segmented_frame=segmented_frames.get(stage_camera),
                     depth_observation=depth_obs,
                     camera_info=camera_info,
                     current_ee_pos=current_ee_pos,
                     gain=4.0,
                 )
-            elif use_visual_servoing_cam == "1st_person":
+            elif stage_camera == "1st_person":
                 action_np = servoing_fnc(
-                    segmented_frame=segmented_frames.get(use_visual_servoing_cam),
+                    segmented_frame=segmented_frames.get(stage_camera),
                     depth_observation=depth_obs,
                     current_ee_pos=None,  # Could extract from observation if available
                     camera_intrinsics=None,  # Uses defaults
                     gain=2,
                 )
             else:
-                raise ValueError(f"Unknown visual servoing camera: {use_visual_servoing_cam}")
+                raise ValueError(f"Unknown visual servoing camera: {stage_camera}")
             action = torch.from_numpy(action_np).unsqueeze(0)  # Add batch dim
 
-            # check if object is close enough to stop visual servoing
-            depth_obs = observation[VISUAL_SERVOING_SETTINGS["1st_person"]["depth_name"]][0,...,0].cpu().numpy()
-            depth_obs_mask = (segmented_frames["1st_person"] > 0) & first_person_gripper_mask
-            object_depths = depth_obs[depth_obs_mask]
-            if  object_depths.min() < 0.15:
-                    print("Object is close enough, stopping visual servoing.")
-                    use_vs = False
-                    sam3_client.send_model_reset()
-
-        if not use_vs:
+        # Use policy if in policy mode
+        elif current_stage.mode == "policy":
             # Infer "task" from attributes of environments.
             # TODO: works with SyncVectorEnv but not AsyncVectorEnv
             observation = add_envs_task(env, observation)
+            # use custom tasks if trained on them:
+            # policy.diffusion.recover_task_dict()
+            observation["task"] = "test_task"
+            observation["task_index"] = torch.tensor([1])
             # here needs to go additinoal data augmentation if any
             observation = preprocessor(observation)
             with torch.inference_mode():

@@ -1,0 +1,39 @@
+job_name: libero10_id4_diffusion_libero_dataset_pick_place
+steps: 200_000
+save_freq: 200_000
+eval_freq: 200_000
+eval:
+  batch_size: 1
+  n_episodes: 10
+log_freq: 500
+batch_size: 32
+dataset:
+ repo_id: libero_10_id4_yellow_white_mug_pick_place_merged
+ root: libero_datasets/libero_10_id4_yellow_white_mug_pick_place_merged
+ image_transforms:
+   enable: false
+wandb:
+  enable: true
+  project: policies_libero
+rename_map: # Hack: this needs to be set in order to pass validate_visual_features_consistency when not having image inputs.
+  dummy: dummy
+env:
+  type: libero
+  task: libero_10
+  task_ids: [4]
+policy:
+  repo_id: OliverHausdoerfer/diffusion_libero_v1
+  type: diffusion
+  optimizer_lr: 0.0002
+  input_features:
+    observation.images.image:
+      type: VISUAL
+      shape: [3, 256, 256]
+    observation.images.image2:
+      type: VISUAL
+      shape: [3, 256, 256]
+    observation.task_ids:
+      type: TASK_ID
+      shape:
+        - 5
+  use_separate_rgb_encoder_per_camera: true

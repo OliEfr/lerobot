@@ -1,0 +1,28 @@
+env:
+  type: pusht
+  visualization_width: 224
+  visualization_height: 224
+  observation_width: 512
+  observation_height: 512
+  obs_type: environment_state_agent_pos_pixels
+  features:
+    action:
+      type: ACTION
+      shape:
+        - 2
+    agent_pos:
+      type: STATE
+      shape:
+        - 2
+    pixels:
+      type: VISUAL
+      shape:
+        - 3
+        - 512
+        - 512
+    environment_state:
+      type: ENV
+      shape:
+        - 16
+  coarsity: coarse
+  action_type: relative
