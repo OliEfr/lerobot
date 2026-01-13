@@ -6,12 +6,14 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 # --- Configuration ---
 # Update these paths to your local environment
-dataset_save_name = "libero_10_id4_pick_50_2"
+dataset_save_name = "libero_10_id4_place_yellow_white_mug_2"
 
 INPUT_H5 = Path("/home/admin_07/project_repos/LIBERO/libero/datasets/libero_10_regenerated_openvla/demo.hdf5")
 OUTPUT_PATH = Path(f"./libero_datasets/{dataset_save_name}")
 REPO_ID = f"OliverHausdoerfer/{dataset_save_name}"
 FPS = 20
+TASK_TO_SELECT = "place"
+TASK_TO_SAVE = "place yellow white mug"
 
 LIBERO_FEATURES = {
     "observation.images.image": {
@@ -47,18 +49,15 @@ def convert_dataset():
         robot_type="franka",
     )
 
-    with File(INPUT_H5, "r") as f:
-        # LIBERO datasets often store the task string in attributes
-        task_label = "test_task"
-        if isinstance(task_label, bytes):
-            task_label = task_label.decode("utf-8")
 
+    with File(INPUT_H5, "r") as f:
         demos = list(f["data"].values())
         
         for demo in tqdm(demos, desc="Converting Episodes"):
             demo_len = len(demo["obs/agentview_rgb"])
 
             actions = np.array(demo["actions"])
+            subtasks = np.array(demo["subtasks"]).astype(str)
 
             # State preprocessing
             ee_states = np.array(demo["obs/ee_states"], dtype=np.float32)
@@ -67,12 +66,14 @@ def convert_dataset():
 
             # 2. Add frames to the internal buffer
             for i in range(demo_len):
+                if not subtasks[i] == TASK_TO_SELECT:
+                    continue
                 frame_data = {
                     "observation.images.image": demo["obs/agentview_rgb"][i],
                     "observation.images.image2": demo["obs/eye_in_hand_rgb"][i],
                     "observation.state": combined_state[i],
                     "action": actions[i].astype(np.float32),
-                    "task": task_label, # Required for task_index mapping in v3
+                    "task": TASK_TO_SAVE,
                 }
                 dataset.add_frame(frame_data)
 
