@@ -114,3 +114,10 @@ first_person_gripper_mask_img = Image.open("lerobot_first_person_cam_gripper_mas
 )
 first_person_gripper_mask = np.array(first_person_gripper_mask_img)
 first_person_gripper_mask = first_person_gripper_mask < 128
+
+# Gripper state limits (observed from hardware)
+LIBERO_GRIPPER_CLOSED_LIMIT = 0.0005  # max abs value when fully closed
+LIBERO_GRIPPER_OPEN_LIMIT = 0.0383     # abs value when fully open
+
+# Threshold calculated as midpoint between closed and open limits
+LIBERO_GRIPPER_THRESHOLD = (LIBERO_GRIPPER_CLOSED_LIMIT + LIBERO_GRIPPER_OPEN_LIMIT) / 2  # ≈ 0.0194

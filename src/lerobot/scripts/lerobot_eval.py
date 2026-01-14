@@ -96,7 +96,8 @@ from lerobot.utils.utils import (
 )
 from lerobot.policies.diffusion.modeling_diffusion import RND
 from lerobot.utils.constants import VISUAL_SERVOING_SETTINGS
-import system2 as system2_module
+import lerobot.policies.system2 as system2_module
+from robosuite.utils.transform_utils import axisangle2quat, get_orientation_error
 
 SAVE_FRAMES = True
 
@@ -403,6 +404,50 @@ def VS_first_person(
 
     return action
 
+def move_to_home(
+    observation: dict,
+    gain: float = 0.5,
+) -> np.ndarray:
+    """
+    Generate action to move the robot end-effector to a predefined home position.
+
+    Args:
+        observation: Observation dict containing robot state in observation["observation.state"]
+        gain: Proportional gain for the delta action (0-1).
+
+    Returns:
+        action: np.ndarray of shape (7,) containing [dx, dy, dz, drx, dry, drz, gripper]
+    """
+    # Define home position (world frame)
+    HOME_POS = np.array([-5.84646606e-02, 2.49015333e-12, 6.81279476e-01], dtype=np.float32)
+    HOME_QUAT = np.array([9.99596605e-01, 2.46212834e-04, -2.84001205e-02, -6.99529629e-06], dtype=np.float32)
+
+    # Extract current end-effector state from observation
+    state = observation["observation.state"].cpu().numpy()[0]
+    current_pos = state[:3]  # [x, y, z]
+    current_aa = state[3:6]  # [ax, ay, az] axis-angle orientation
+
+    # Compute position delta (simple subtraction)
+    delta_pos = HOME_POS - current_pos
+
+    # Compute rotation delta using proper quaternion math
+    # Convert current axis-angle to quaternion
+    q_current = axisangle2quat(current_aa)
+    # Compute orientation error (returns 3D vector for impedance control)
+    delta_rot = get_orientation_error(HOME_QUAT, q_current)
+
+    # Apply gain to both deltas
+    delta_pos = gain * delta_pos
+    delta_rot = gain * delta_rot
+
+    # Return action: [dx, dy, dz, drx, dry, drz, gripper]
+    action = np.zeros(7, dtype=np.float32)
+    action[:3] = delta_pos
+    action[3:6] = delta_rot
+    action[6] = 0  # gripper action (0 = no change)
+
+    return action
+
 def VS_third_person(
     segmented_frame: np.ndarray,
     depth_observation: np.ndarray,
@@ -660,6 +705,8 @@ def rollout(
         # Determine mode from current stage
         current_stage = system2.get_current_stage()
 
+        assert current_stage.mode in ["sam3", "policy", "home"], f"Unknown stage mode: {current_stage.mode}"
+
         # Compute vs action
         if current_stage.mode == "sam3" and segmented_frames is not None:
             # Get camera from current stage
@@ -671,6 +718,7 @@ def rollout(
             depth_obs = observation[depth_key].cpu().numpy()
 
             servoing_fnc = globals()[VISUAL_SERVOING_SETTINGS[stage_camera]["servoing_fnc"]]
+
 
             if stage_camera == "3rd_person":
                 # Query camera_info dynamically for this stage's camera
@@ -716,6 +764,13 @@ def rollout(
             with torch.inference_mode():
                 action = policy.select_action(observation)
             action = postprocessor(action)
+        elif current_stage.mode == "home":
+            action_np = move_to_home(
+                observation=observation,
+                gain=0.5,
+            )
+            action = torch.from_numpy(action_np).unsqueeze(0)  # Add batch dim
+        
         if rnd_path:
             rnd_score = policy.predict_rnd(observation)
             rnd_scores.append(float(rnd_score))
