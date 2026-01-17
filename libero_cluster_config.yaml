@@ -1,0 +1,6 @@
+# this is required so that the libero assets are found in the container and do not need to be downloaded everytime the container is started. During container creation the libero assets must be mounted inside the container. See docker_run.sh. env variable LIBERO_PATH must point to the LIBERO repo on the host machine.
+assets: /opt/lerobot-venv/lib/python3.10/site-packages/libero/libero/assets
+bddl_files: /libero_data/bddl_files
+benchmark_root: /libero_data
+datasets: /libero_data/../datasets
+init_states: /libero_data/init_files

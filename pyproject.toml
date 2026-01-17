@@ -148,10 +148,10 @@ aloha = ["gym-aloha>=0.1.2,<0.2.0"]
 #     "gym-pusht @ git+https://github.com/OliEfr/gym-pusht.git@main",
 #     "pymunk>=6.6.0,<7.0.0"
 # ]
-pusht_local = [
-    "gym-pusht @ file:./gym-pusht",
-    "pymunk>=6.6.0,<7.0.0"
-]
+# pusht_local = [
+#     "gym-pusht @ file:./gym-pusht",
+#     "pymunk>=6.6.0,<7.0.0"
+# ]
 libero = ["lerobot[transformers-dep]", "hf-libero>=0.1.3,<0.2.0"]
 metaworld = ["metaworld==3.0.0"]
 
@@ -177,6 +177,8 @@ all = [
     "lerobot[phone]",
     "lerobot[libero]",
     "lerobot[metaworld]",
+    "scikit-learn",
+    "umap-learn",
 ]
 
 [project.scripts]

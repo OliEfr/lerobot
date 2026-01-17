@@ -58,13 +58,13 @@ from lerobot.datasets.libero_dataset_tools import analyze_dataset_tasks
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-from sklearn.decomposition import PCA
-from umap import UMAP
-from sklearn.manifold import TSNE
+# from sklearn.decomposition import PCA
+# from umap import UMAP
+# from sklearn.manifold import TSNE
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader
-from sklearn.preprocessing import StandardScaler
+# from sklearn.preprocessing import StandardScaler
 
 def update_policy(
     train_metrics: MetricsTracker,
