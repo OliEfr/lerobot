@@ -19,18 +19,20 @@ class ExtendActionConfig:
     Args:
         repo_id: Repository ID of the source dataset (e.g., "libero_10_id4_pick_150_merged")
         root: Root directory containing the dataset (e.g., "libero_datasets")
-        push_to_hub: Whether to push the new dataset to HuggingFace Hub 
-        new_suffix: Suffix to append to repo_id for the new dataset 
+        push_to_hub: Whether to push the new dataset to HuggingFace Hub
+        new_suffix: Suffix to append to repo_id for the new dataset
         hub_user: HuggingFace Hub username/organization to push to
+        success_window: Number of frames at the end of each episode to mark as success
     """
     repo_id: str = "libero_10_id4_yellow_white_mug_pick_place_merged"
     root: str = "libero_datasets"
     push_to_hub: bool = True
     new_suffix: str = "_SP"
     hub_user: str = "OliverHausdoerfer"
+    success_window: int = 3
 
 
-def create_extended_actions(dataset: LeRobotDataset, episode_lengths: dict[int, int]) -> np.ndarray:
+def create_extended_actions(dataset: LeRobotDataset, episode_lengths: dict[int, int], success_window: int) -> np.ndarray:
     """Create extended action array with success prediction dimension.
 
     Pre-computes all extended actions by loading the original actions and
@@ -39,10 +41,11 @@ def create_extended_actions(dataset: LeRobotDataset, episode_lengths: dict[int, 
     Args:
         dataset: LeRobot dataset to extend
         episode_lengths: Dictionary mapping episode_index to episode length
+        success_window: Number of frames at the end of each episode to mark as success
 
     Returns:
         Extended action array with shape (total_frames, original_action_dim + 1)
-        Last dimension is 1.0 for last 5 frames per episode, 0.0 otherwise
+        Last dimension is 1.0 for last success_window frames per episode, -1.0 otherwise
     """
     logging.info("Loading original actions from dataset...")
 
@@ -65,9 +68,9 @@ def create_extended_actions(dataset: LeRobotDataset, episode_lengths: dict[int, 
         episode_idx = frame["episode_index"].item() if hasattr(frame["episode_index"], "item") else frame["episode_index"]
         frame_idx = frame["frame_index"].item() if hasattr(frame["frame_index"], "item") else frame["frame_index"]
 
-        # Determine if in last 5 frames
+        # Determine if in last success_window frames
         episode_length = episode_lengths[episode_idx]
-        is_success_frame = 1.0 if frame_idx >= (episode_length - 5) else -1.0 # use -1 and 1 for better normalization
+        is_success_frame = 1.0 if frame_idx >= (episode_length - success_window) else -1.0 # use -1 and 1 for better normalization
 
         # Store extended action
         extended_actions[idx, :original_action_dim] = original_action
@@ -118,13 +121,13 @@ def extend_action_with_success_prediction(cfg: ExtendActionConfig) -> None:
     logging.info(f"Episode lengths: min={min(lengths)}, max={max(lengths)}, mean={np.mean(lengths):.1f}")
 
     # Warn about edge cases
-    short_episodes = [idx for idx, length in episode_lengths.items() if length < 5]
+    short_episodes = [idx for idx, length in episode_lengths.items() if length < cfg.success_window]
     if short_episodes:
-        logging.warning(f"Found {len(short_episodes)} episodes with < 5 frames. All frames in these episodes will have success_prediction = 1")
+        logging.warning(f"Found {len(short_episodes)} episodes with < {cfg.success_window} frames. All frames in these episodes will have success_prediction = 1")
 
     # Step 3: Create extended actions
     logging.info("Creating extended action feature...")
-    extended_actions = create_extended_actions(dataset, episode_lengths)
+    extended_actions = create_extended_actions(dataset, episode_lengths, cfg.success_window)
 
     # Build new feature info with extended shape
     new_action_shape = (original_action_shape[0] + 1,)

@@ -414,6 +414,9 @@ class SmolVLAPolicy(PreTrainedPolicy):
         """Pad state"""
         state = batch[OBS_STATE][:, -1, :] if batch[OBS_STATE].ndim > 2 else batch[OBS_STATE]
         state = pad_vector(state, self.config.max_state_dim)
+        if self.config.omit_state:
+            state = torch.zeros_like(state)
+            print("ommitting state")
         return state
 
     def prepare_action(self, batch):

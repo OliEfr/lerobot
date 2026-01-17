@@ -141,6 +141,7 @@ class SAM3StreamClient:
         # PUSH socket to send frames to SAM3
         self._sender = self._context.socket(zmq.PUSH)
         self._sender.setsockopt(zmq.SNDHWM, 1)  # Keep send queue small
+        self._sender.setsockopt(zmq.LINGER, 0)  # Discard unsent messages on close
         self._sender.connect(send_endpoint)
 
         # SUB socket to receive segmented frames from SAM3
