@@ -21,21 +21,19 @@
 # docker run -it --gpus all -v $(pwd):/lerobot --rm lerobot-user
 
 # Configure the base image
-ARG PYTHON_VERSION=3.10
-FROM nvidia/cuda:12.4.1-base-ubuntu22.04
+FROM nvcr.io/nvidia/cuda:12.4.0-devel-ubuntu22.04
 
 # Configure environment variables
 ENV DEBIAN_FRONTEND=noninteractive \
-    MUJOCO_GL=egl \
+    MUJOCO_GL=osmesa \
     PATH=/opt/lerobot-venv/bin:$PATH
 
-
-ENV NVIDIA_VISIBLE_DEVICES ${NVIDIA_VISIBLE_DEVICES:-all}
-ENV NVIDIA_DRIVER_CAPABILITIES ${NVIDIA_DRIVER_CAPABILITIES:+$NVIDIA_DRIVER_CAPABILITIES,}graphics
+# ENV NVIDIA_VISIBLE_DEVICES ${NVIDIA_VISIBLE_DEVICES:-all}
+# ENV NVIDIA_DRIVER_CAPABILITIES ${NVIDIA_DRIVER_CAPABILITIES:+$NVIDIA_DRIVER_CAPABILITIES,}graphics
 
 # Install system dependencies and uv (as root)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential git curl libglib2.0-0 libegl1-mesa-dev ffmpeg \
+    build-essential git curl libglib2.0-0 libegl1-mesa-dev libgl1-mesa-glx libegl1-mesa ffmpeg  libosmesa6-dev libglfw3 xvfb \
     libusb-1.0-0-dev speech-dispatcher libgeos-dev portaudio19-dev \
     cmake pkg-config ninja-build \
     python3.10 python3.10-venv python3.10-dev \

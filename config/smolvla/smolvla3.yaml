@@ -13,8 +13,8 @@ policy:
   push_to_hub: false
   optimizer_lr: 1e-3
 dataset:
- repo_id: libero_10_id4_yellow_white_mug_pick_place_merged
- root: libero_datasets/libero_10_id4_yellow_white_mug_pick_place_merged
+ repo_id: libero_10_id4_yellow_white_mug_pick_place_merged_SP
+ root: libero_datasets/libero_10_id4_yellow_white_mug_pick_place_merged_SP
  image_transforms:
    enable: false
 env:
@@ -23,4 +23,4 @@ env:
   task_ids: [4]
 wandb:
   enable: true
-  project: libero_10_id4_yellow_white_mug_pick_place_merged
+  project: policies_lerobot_smolvla_pick_150_merged_SP
