@@ -67,7 +67,7 @@ class TrainPipelineConfig(HubMixin):
     checkpoint_path: Path | None = field(init=False, default=None)
     # Rename map for the observation to override the image and state keys
     rename_map: dict[str, str] = field(default_factory=dict)
-
+    
     task_to_solve: str | None = None # a task description for libero to only load demonstrations from that task in the dataloader; ie "task_to_solve" = "task_to_train_on"; only supported for libero
 
     def validate(self) -> None:
@@ -116,13 +116,7 @@ class TrainPipelineConfig(HubMixin):
         elif not self.output_dir:
             now = dt.datetime.now()
             train_dir = f"{now:%Y-%m-%d}/{now:%H-%M-%S}_{self.job_name}"
-            cluster_output_dir = "/dss/dssmcmlfs01/pn57pi/pn57pi-dss-0001/oliver_hausdoerfer/lerobot"
-            output_base_dir = (
-                cluster_output_dir
-                if os.path.exists(cluster_output_dir)
-                else "outputs/train"
-            )
-            self.output_dir = Path(output_base_dir) / train_dir
+            self.output_dir = Path("outputs/train") / train_dir
 
         if isinstance(self.dataset.repo_id, list):
             raise NotImplementedError("LeRobotMultiDataset is not currently implemented.")

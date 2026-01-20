@@ -781,6 +781,9 @@ def rollout(
         assert action_numpy.ndim == 2, "Action dimensions should be (batch, action_dim)"
 
         # Apply the next action.
+        if action_numpy.shape[1] == 8:
+            action_numpy = action_numpy[:, :7]  # assume predict success for libero env (last action is success flag)
+            print(f"Success: {action_numpy[:, -1]}")
         observation, reward, terminated, truncated, info = env.step(action_numpy)
         if render_callback is not None:
             render_callback(env)
