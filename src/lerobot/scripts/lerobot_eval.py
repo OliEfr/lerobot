@@ -99,8 +99,29 @@ from lerobot.utils.constants import VISUAL_SERVOING_SETTINGS
 import lerobot.policies.system2 as system2_module
 from robosuite.utils.transform_utils import axisangle2quat, get_orientation_error
 
+from robosuite.utils.camera_utils import (
+    get_camera_transform_matrix,
+    bilinear_interpolate
+)
+
 SAVE_FRAMES = True
 
+def transform_from_pixels_to_world(pixels, depth_map, camera_to_world_transform):
+    pixels = pixels.astype(float)
+    z = bilinear_interpolate(im=depth_map, x=pixels[..., 1], y=pixels[..., 0])
+    z = z.reshape(-1, 1)  # shape [..., 1]
+
+    # form 4D homogenous camera vector to transform - [x * z, y * z, z, 1]
+    # (note that we need to swap the first 2 dimensions of pixels to go from pixel indices
+    # to camera coordinates)
+    cam_pts = [pixels[..., 1:2] * z, pixels[..., 0:1] * z, z, np.ones_like(z)]
+    cam_pts = np.concatenate(cam_pts, axis=-1)  # shape [..., 4]
+
+    # batch matrix multiplication of 4 x 4 matrix and 4 x 1 vectors to do camera to robot frame transform
+    mat_reshape = [1] * len(cam_pts.shape[:-1]) + [4, 4]
+    cam_trans = camera_to_world_transform.reshape(mat_reshape)  # shape [..., 4, 4]
+    points = np.matmul(cam_trans, cam_pts[..., None])[..., 0]  # shape [..., 4]
+    return points[..., :3]
 
 
 class SAM3StreamClient:
@@ -110,7 +131,7 @@ class SAM3StreamClient:
         self,
         send_endpoint: str = "tcp://localhost:5555",
         recv_endpoint: str = "tcp://localhost:5556",
-        target_size: tuple[int, int] = (960, 540),  # (width, height) expected by SAM3
+        target_size: tuple[int, int] = (256, 256),  # (width, height) expected by SAM3
         original_size: tuple[int, int] = (256,256),
         output_dir: str | None = "output_sam3",  # Directory to save segmented frames
     ):
@@ -172,14 +193,19 @@ class SAM3StreamClient:
 
         return image_batch
 
-    def send_frame_batched(self, observation: dict, sam3_stage: int, prompt: str | None = None) -> bool:
+    def send_frame_batched(
+        self, observation: dict, sam3_stage: int, prompt: str | dict[str, str] | None = None
+    ) -> bool:
         """
         Send batched RGB frames from observation to SAM3.
 
         Args:
             observation: Observation dict containing RGB images.
             sam3_stage: SAM3 stage counter. Server resets when this increases.
-            prompt: Optional prompt for this stage. If None, uses empty string.
+            prompt: Text prompt(s) for segmentation. Can be:
+                - str: same prompt for all cameras (backward compatible)
+                - dict: {camera_name: prompt} for per-camera prompts
+                - None: uses empty string
 
         Returns:
             True if frames were sent, False otherwise.
@@ -206,12 +232,9 @@ class SAM3StreamClient:
             rgb_batch = rgb_batch.astype(np.uint8)
         rgb_batch = np.ascontiguousarray(rgb_batch)
 
-        # Use provided prompt or empty string
-        actual_prompt = prompt if prompt is not None else ""
-
         # Pack message with msgpack
         msg = msgpack.packb({
-            "prompt": actual_prompt,
+            "prompt": prompt,
             "sam3_stage": sam3_stage,
             "frames": rgb_batch.tobytes(),
         }, use_bin_type=True)
@@ -450,11 +473,12 @@ def move_to_home(
     return action
 
 def VS_third_person(
+    env,
     segmented_frame: np.ndarray,
     depth_observation: np.ndarray,
     camera_info: dict,
+    gain: np.ndarray,
     current_ee_pos: np.ndarray | None = None,
-    gain: float = 0.1,
 ) -> np.ndarray:
     """
     Compute delta end-effector action to move towards the centroid of the segmented object.
@@ -476,67 +500,46 @@ def VS_third_person(
     Returns:
         delta_action: np.ndarray of shape (7,) containing [dx, dy, dz, 0, 0, 0, gripper]
     """
+    # undo horizontal flip (libero base env returns double-flipped images as this is what the policy is expecting)
+    segmented_frame = segmented_frame[:, ::-1] 
+    depth_observation = depth_observation[0, :, ::-1, 0]
+
     # Handle batch dimension in depth observation
-    if depth_observation.ndim > 2:
-        depth_observation = depth_observation[0]
-    assert depth_observation.shape[:2] == segmented_frame.shape[:2]
+    assert depth_observation.shape == segmented_frame.shape
+    assert len(depth_observation.shape) == 2
 
     h, w = segmented_frame.shape[:2]
 
-    # Extract camera parameters
-    K = camera_info["intrinsic"]
-    camera_to_world = camera_info["camera_to_world"]
+    # Find all pixel-coords of non-zero points
+    coords = np.argwhere(segmented_frame > 0)
 
-    fx, fy = K[0, 0], K[1, 1]
-    cx, cy = K[0, 2], K[1, 2]
+    # centroid_row = int(np.mean(coords[:, 0]))
+    # centroid_col = int(np.mean(coords[:, 1]))
 
-    # Find centroid of the segmented region (in rotated image space)
-    moments = cv2.moments(segmented_frame)
-    if moments["m00"] < 1e-6:
-        # No segmented object found, return zero action
-        return np.zeros(7, dtype=np.float32)
 
-    centroid_u = moments["m10"] / moments["m00"]  # x pixel coordinate
-    centroid_v = moments["m01"] / moments["m00"]  # y pixel coordinate
+    world_to_camera = get_camera_transform_matrix(
+        env.envs[0].sim,
+        "agentview",
+        h,
+        w,
+    )
+    camera_to_world = np.linalg.inv(world_to_camera)
 
-    # IMPORTANT: Account for the 180-degree rotation applied in libero.py
-    # The images are flipped with [::-1, ::-1], so we need to flip the coordinates back
-    centroid_u_original = w - 1 - centroid_u
-    centroid_v_original = h - 1 - centroid_v
+    pixels = np.array([coords[:, 0], coords[:, 1]])
+    target_pos_world = transform_from_pixels_to_world(
+        pixels=pixels.T,
+        depth_map=depth_observation,
+        camera_to_world_transform=camera_to_world
+    )
 
-    # Sample depth at centroid (in the rotated image space, matching segmentation mask)
-    centroid_x_int = int(round(centroid_u))
-    centroid_y_int = int(round(centroid_v))
+    target_pos_world = np.array(
+        [
+            (np.percentile(target_pos_world[:, 0], 95) + np.percentile(target_pos_world[:, 0], 5)) / 2,
+            (np.percentile(target_pos_world[:, 1], 95) + np.percentile(target_pos_world[:, 1], 5)) / 2,
+            (np.percentile(target_pos_world[:, 2], 95) + np.percentile(target_pos_world[:, 2], 5)) / 2,
+        ]
+    )
 
-    # Sample depth in 5x5 neighborhood and take median (robust to noise)
-    y_min = max(0, centroid_y_int - 2)
-    y_max = min(h, centroid_y_int + 3)
-    x_min = max(0, centroid_x_int - 2)
-    x_max = min(w, centroid_x_int + 3)
-
-    depth_patch = depth_observation[y_min:y_max, x_min:x_max]
-    valid_depths = depth_patch[depth_patch > 0]
-
-    if len(valid_depths) == 0:
-        # No valid depth, return zero action
-        return np.zeros(7, dtype=np.float32)
-
-    centroid_z = np.median(valid_depths)
-
-    # Convert pixel coordinates + depth to 3D camera coordinates
-    # Using pinhole camera model with ORIGINAL (un-rotated) coordinates
-    # Note: In camera frame, Z points forward (into the scene)
-    X_cam = (centroid_u_original - cx) * centroid_z / fx
-    Y_cam = (centroid_v_original - cy) * centroid_z / fy
-    Z_cam = centroid_z
-
-    # Point in camera frame (homogeneous)
-    point_camera = np.array([X_cam, Y_cam, Z_cam, 1.0])
-
-    # Transform to world frame
-    point_world = camera_to_world @ point_camera
-    target_pos_world = point_world[:3]
-    target_pos_world[-1] -= 0.05 # somehow the tf is not correct and I manually adjust; fix later.
 
     # Compute delta action
     if current_ee_pos is not None:
@@ -561,7 +564,6 @@ def VS_third_person(
     if SAVE_FRAMES:
         # Debug: save segmented_frame with centroid overlay and world coordinates
         debug_img = cv2.cvtColor(segmented_frame * 255, cv2.COLOR_GRAY2BGR)
-        cv2.circle(debug_img, (centroid_x_int, centroid_y_int), 5, (0, 0, 255), -1)
         # Add text showing world coordinates
         cv2.putText(
             debug_img,
@@ -584,6 +586,16 @@ def VS_third_person(
             )
         frame_idx = len(os.listdir(debug_dir))
         cv2.imwrite(os.path.join(debug_dir, f"segmented_frame_{frame_idx:05d}.png"), debug_img)
+        
+        # Save depth image as greyscale
+        depth_vis = depth_observation
+        # Normalize depth to 0-255 range for visualization
+        depth_min, depth_max = depth_vis.min(), depth_vis.max()
+        if depth_max > depth_min:
+            depth_normalized = ((depth_vis - depth_min) / (depth_max - depth_min) * 255).astype(np.uint8)
+        else:
+            depth_normalized = np.zeros_like(depth_vis, dtype=np.uint8)
+        cv2.imwrite(os.path.join(debug_dir, f"depth_frame_{frame_idx:05d}.png"), depth_normalized)
 
     return action
 
@@ -662,6 +674,7 @@ def rollout(
     all_successes = []
     all_dones = []
     action = torch.zeros((1,7))
+    success_prediction = np.array([[-1.0]*env.num_envs]).T
 
     step = 0
     # Keep track of which environments are done.
@@ -690,10 +703,21 @@ def rollout(
                 sam3_client.drain_stale_messages()
 
             current_stage = system2.get_current_stage()
+
+            # Build per-camera prompts dict
+            camera_prompts = {
+                key: value
+                for key, value in (
+                    ("3rd_person", current_stage.sam3_third_person_prompt),
+                    ("1st_person", current_stage.sam3_first_person_prompt),
+                )
+                if value is not None
+            }
+
             sam3_client.send_frame_batched(
                 observation,
                 sam3_stage=current_stage.sam3_stage,
-                prompt=current_stage.sam3_prompt
+                prompt=camera_prompts
             )
             segmented_frames = sam3_client.receive_segmented_frame()
 
@@ -701,6 +725,7 @@ def rollout(
         _ = system2.check_and_advance(
             observation=observation,
             segmented_frames=segmented_frames,
+            success_prediction=success_prediction
         )
 
         # Determine mode from current stage
@@ -733,11 +758,12 @@ def rollout(
                     current_ee_pos = state[:3]  # First 3 elements are EE position
 
                 action_np = servoing_fnc(
+                    env=env,
                     segmented_frame=segmented_frames.get(stage_camera),
                     depth_observation=depth_obs,
                     camera_info=camera_info,
                     current_ee_pos=current_ee_pos,
-                    gain=4.0,
+                    gain=np.array([6, 6, 2])
                 )
             elif stage_camera == "1st_person":
                 action_np = servoing_fnc(
@@ -758,8 +784,8 @@ def rollout(
             observation = add_envs_task(env, observation)
             # use custom tasks if trained on them:
             # policy.diffusion.recover_task_dict()
-            observation["task"] = "test_task"
-            observation["task_index"] = torch.tensor([1])
+            observation["task"] = current_stage.policy_instruction
+            observation["task_index"] = current_stage.policy_task_index
             # here needs to go additinoal data augmentation if any
             observation = preprocessor(observation)
             with torch.inference_mode():
@@ -780,10 +806,11 @@ def rollout(
         action_numpy: np.ndarray = action.to("cpu").numpy()
         assert action_numpy.ndim == 2, "Action dimensions should be (batch, action_dim)"
 
-        # Apply the next action.
+        # Apply the next action
+        # assume success prediciton as last action dim for libero env
         if action_numpy.shape[1] == 8:
-            action_numpy = action_numpy[:, :7]  # assume predict success for libero env (last action is success flag)
-            print(f"Success: {action_numpy[:, -1]}")
+            success_prediction = action_numpy[:, -1]
+            action_numpy = action_numpy[:, :7]
         observation, reward, terminated, truncated, info = env.step(action_numpy)
         if render_callback is not None:
             render_callback(env)

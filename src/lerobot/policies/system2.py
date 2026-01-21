@@ -16,6 +16,7 @@ class SuccessCriterion(Protocol):
         self,
         observation: dict,
         segmented_frames: dict[str, np.ndarray] | None = None,
+        success_prediction: np.ndarray | None = None,
     ) -> bool:
         """
         Check if success criterion is met.
@@ -23,6 +24,7 @@ class SuccessCriterion(Protocol):
         Args:
             observation: Current observation dict (contains all sensor data)
             segmented_frames: SAM3 segmentation masks by camera name (optional)
+            success_prediction: Policy's success prediction array (optional)
 
         Returns:
             True if criterion is met, False otherwise
@@ -42,6 +44,7 @@ class DepthThreshold(SuccessCriterion):
         self,
         observation: dict,
         segmented_frames: dict[str, np.ndarray] | None = None,
+        success_prediction: np.ndarray | None = None,  # noqa: ARG002
     ) -> bool:
         if segmented_frames is None:
             return False
@@ -84,6 +87,7 @@ class DepthThresholdAbove(SuccessCriterion):
         self,
         observation: dict,
         segmented_frames: dict[str, np.ndarray] | None = None,
+        success_prediction: np.ndarray | None = None,  # noqa: ARG002
     ) -> bool:
         if segmented_frames is None:
             return False
@@ -121,6 +125,7 @@ class NeverSucceeds(SuccessCriterion):
         self,
         observation: dict,  # noqa: ARG002
         segmented_frames: dict[str, np.ndarray] | None = None,  # noqa: ARG002
+        success_prediction: np.ndarray | None = None,  # noqa: ARG002
     ) -> bool:
         return False
 
@@ -140,6 +145,7 @@ class GripperClosedForN(SuccessCriterion):
         self,
         observation: dict,
         segmented_frames: dict[str, np.ndarray] | None = None,  # noqa: ARG002
+        success_prediction: np.ndarray | None = None,  # noqa: ARG002
     ) -> bool:
         if self.state_key not in observation:
             return False
@@ -177,6 +183,7 @@ class GripperOpenedForN(SuccessCriterion):
         self,
         observation: dict,
         segmented_frames: dict[str, np.ndarray] | None = None,  # noqa: ARG002
+        success_prediction: np.ndarray | None = None,  # noqa: ARG002
     ) -> bool:
         if self.state_key not in observation:
             return False
@@ -211,6 +218,7 @@ class TimestepCounter(SuccessCriterion):
         self,
         observation: dict,  # noqa: ARG002
         segmented_frames: dict[str, np.ndarray] | None = None,  # noqa: ARG002
+        success_prediction: np.ndarray | None = None,  # noqa: ARG002
     ) -> bool:
         self._step_count += 1
         return self._step_count >= self.required_steps
@@ -218,6 +226,41 @@ class TimestepCounter(SuccessCriterion):
     def reset(self) -> None:
         """Reset step count for new episode."""
         object.__setattr__(self, "_step_count", 0)
+
+
+@dataclass
+class SuccessPredictionForN(SuccessCriterion):
+    """Success when policy's success prediction has been >0 for N consecutive timesteps."""
+
+    threshold: float = 0.0  # threshold for success prediction (>0 is success)
+    required_steps: int = 3  # number of consecutive steps required
+
+    _consecutive_count: int = field(default=0, init=False, repr=False)
+
+    def __call__(
+        self,
+        observation: dict,  # noqa: ARG002
+        segmented_frames: dict[str, np.ndarray] | None = None,  # noqa: ARG002
+        success_prediction: np.ndarray | None = None,
+    ) -> bool:
+        if success_prediction is None:
+            return False
+
+        # Extract success value from the prediction array
+        # Expected shape: (batch,) from lerobot_eval.py
+        # success_prediction[0] is the success value for batch element 0
+        success_value = success_prediction[0]
+
+        if success_value > self.threshold:
+            self._consecutive_count += 1
+        else:
+            self._consecutive_count = 0
+
+        return self._consecutive_count >= self.required_steps
+
+    def reset(self) -> None:
+        """Reset consecutive count for new episode."""
+        object.__setattr__(self, "_consecutive_count", 0)
 
 
 @dataclass
@@ -231,10 +274,11 @@ class AndCriterion(SuccessCriterion):
         self,
         observation: dict,
         segmented_frames: dict[str, np.ndarray] | None = None,
+        success_prediction: np.ndarray | None = None,
     ) -> bool:
         # Evaluate both criteria to ensure state updates (e.g., gripper counter)
-        result_a = self.criterion_a(observation, segmented_frames)
-        result_b = self.criterion_b(observation, segmented_frames)
+        result_a = self.criterion_a(observation, segmented_frames, success_prediction)
+        result_b = self.criterion_b(observation, segmented_frames, success_prediction)
         return result_a and result_b
 
     def reset(self) -> None:
@@ -254,9 +298,12 @@ class Stage:
     name: str  # human-readable name for the stage
     mode: Literal["sam3", "policy", "home"]
     success_criterion: SuccessCriterion
-    sam3_prompt: str | None = None  # model prompt for this stage
+    sam3_third_person_prompt: str | None = None  # prompt for 3rd person camera
+    sam3_first_person_prompt: str | None = None  # prompt for 1st person camera
     vs_camera: Literal["1st_person", "3rd_person"] | None = None  # camera used for visual servoing
     sam3_stage: int = 0  # SAM3 stage counter - increment for each sam3 stage to trigger reset
+    policy_instruction: str | None = None  # instruction for policy mode
+    policy_task_index: int | None = None  # task index for policy mode
 
 
 # Import after class definitions to avoid circular imports
@@ -276,68 +323,65 @@ class System2:
                     depth_key=VISUAL_SERVOING_SETTINGS["1st_person"]["depth_name"],
                     camera="1st_person",
                 ),
-                sam3_prompt="yellow white mug",
+                sam3_third_person_prompt="yellow white mug",
+                sam3_first_person_prompt="yellow white mug",
                 vs_camera="3rd_person",
                 sam3_stage=0,
             ),
             Stage(
                 name="grasp_mug",
                 mode="policy",
-                success_criterion=GripperClosedForN(
-                        threshold=0.02,
-                        required_steps=10,
-                        state_key="observation.state",
-                        gripper_indices=(6, 7),
+                success_criterion=SuccessPredictionForN(
+                        required_steps=3,
                     ),
-                sam3_prompt="yellow white mug",
+                sam3_third_person_prompt="yellow white mug",
+                sam3_first_person_prompt="yellow white mug",
                 vs_camera=None,
                 sam3_stage=0,
+                policy_instruction="test_task",
+                policy_task_index=1
             ),
             Stage(
                 name="return_home",
                 mode="home",
-                success_criterion=TimestepCounter(required_steps=50),
-                sam3_prompt=None,
+                success_criterion=TimestepCounter(required_steps=200),
+                sam3_third_person_prompt="left plate",
+                sam3_first_person_prompt="plate",
                 vs_camera=None,
-                sam3_stage=0,  # Same as grasp_mug since no SAM3 reset needed
+                sam3_stage=1,  # important to swtich SAM3 stage and prompte before starting next sam3 stage
             ),
             Stage(
                 name="move_to_plate",
                 mode="sam3",
                 success_criterion=DepthThreshold(
-                    threshold=0.15,
+                    threshold=0.2,
                     depth_key=VISUAL_SERVOING_SETTINGS["1st_person"]["depth_name"],
                     camera="1st_person",
                 ),
-                sam3_prompt="left plate",
+                sam3_third_person_prompt="left plate",
+                sam3_first_person_prompt="plate",
                 vs_camera="3rd_person",
                 sam3_stage=1,
             ),
             Stage(
                 name="place_on_plate",
                 mode="policy",
-                success_criterion=AndCriterion(
-                    criterion_a=DepthThresholdAbove(
-                        threshold=0.15,
-                        depth_key=VISUAL_SERVOING_SETTINGS["1st_person"]["depth_name"],
-                        camera="1st_person",
+                success_criterion=SuccessPredictionForN(
+                        required_steps=3,
                     ),
-                    criterion_b=GripperOpenedForN(
-                        threshold=0.02,
-                        required_steps=10,
-                        state_key="observation.state",
-                        gripper_indices=(6, 7),
-                    ),
-                ),
-                sam3_prompt="plate",
+                sam3_third_person_prompt="left plate",
+                sam3_first_person_prompt="plate",
                 vs_camera=None,
                 sam3_stage=2,
+                policy_instruction="place yellow white mug",
+                policy_task_index=0,
             ),
             Stage(
                 name="return_home",
                 mode="home",
-                success_criterion=TimestepCounter(required_steps=220),
-                sam3_prompt=None,
+                success_criterion=TimestepCounter(required_steps=1000),
+                sam3_third_person_prompt=None,
+                sam3_first_person_prompt=None,
                 vs_camera=None,
                 sam3_stage=2,  # Same as grasp_mug since no SAM3 reset needed
             ),
@@ -349,7 +393,8 @@ class System2:
                     depth_key=VISUAL_SERVOING_SETTINGS["1st_person"]["depth_name"],
                     camera="1st_person",
                 ),
-                sam3_prompt="grey mug on the right",
+                sam3_third_person_prompt="grey mug on the right",
+                sam3_first_person_prompt="grey mug",
                 vs_camera="3rd_person",
                 sam3_stage=3,
             ),
@@ -362,7 +407,8 @@ class System2:
                         state_key="observation.state",
                         gripper_indices=(6, 7),
                     ),
-                sam3_prompt="grey mug on the right",
+                sam3_third_person_prompt="grey mug on the right",
+                sam3_first_person_prompt=None,
                 vs_camera=None,
                 sam3_stage=3,
             ),
@@ -370,7 +416,8 @@ class System2:
                 name="return_home",
                 mode="home",
                 success_criterion=TimestepCounter(required_steps=50),
-                sam3_prompt=None,
+                sam3_third_person_prompt=None,
+                sam3_first_person_prompt=None,
                 vs_camera=None,
                 sam3_stage=3,
             ),
@@ -382,7 +429,8 @@ class System2:
                     depth_key=VISUAL_SERVOING_SETTINGS["1st_person"]["depth_name"],
                     camera="1st_person",
                 ),
-                sam3_prompt="left plate",
+                sam3_third_person_prompt="left plate",
+                sam3_first_person_prompt=None,
                 vs_camera="3rd_person",
                 sam3_stage=4,
             ),
@@ -402,7 +450,8 @@ class System2:
                         gripper_indices=(6, 7),
                     ),
                 ),
-                sam3_prompt="plate",
+                sam3_third_person_prompt="plate",
+                sam3_first_person_prompt=None,
                 vs_camera=None,
                 sam3_stage=4,
             ),
@@ -410,7 +459,8 @@ class System2:
                 name="return_home",
                 mode="home",
                 success_criterion=TimestepCounter(required_steps=50),
-                sam3_prompt=None,
+                sam3_third_person_prompt=None,
+                sam3_first_person_prompt=None,
                 vs_camera=None,
                 sam3_stage=4,
             ),
@@ -427,6 +477,7 @@ class System2:
         self,
         observation: dict,
         segmented_frames: dict[str, np.ndarray] | None = None,
+        success_prediction: np.ndarray | None = None,
     ) -> bool:
         """
         Check if current stage's success criterion is met and advance if so.
@@ -434,7 +485,7 @@ class System2:
         Args:
             observation: Current observation dict (contains all sensor data)
             segmented_frames: SAM3 segmentation masks by camera name (optional)
-
+            success_prediction: Success prediction array (optional)
         Returns:
             True if stage was advanced, False otherwise
         """
@@ -448,6 +499,7 @@ class System2:
         is_met = current_stage.success_criterion(
             observation=observation,
             segmented_frames=segmented_frames,
+            success_prediction=success_prediction,
         )
 
         if is_met:
