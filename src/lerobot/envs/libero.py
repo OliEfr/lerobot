@@ -37,6 +37,8 @@ from robosuite.utils.camera_utils import (
 )
 from robosuite.utils.transform_utils import pose_inv
 
+import cv2
+
 
 def _parse_camera_names(camera_name: str | Sequence[str]) -> list[str]:
     """Normalize camera_name into a non-empty list of strings."""
@@ -251,13 +253,19 @@ class LiberoEnv(gym.Env):
         depths = {}
         for camera_name in self.camera_name:
             image = raw_obs[camera_name]
-            image = image[::-1, ::-1]  # rotate 180 degrees
+            image = image[::-1, ::-1] # flip on both axes to align with trained policy and common convention
             images[self.camera_name_mapping[camera_name]] = image
 
             depth_name = camera_name.replace("_image", "_depth")
             depth = get_real_depth_map(self._env.sim, raw_obs[depth_name])
-            depth = depth[::-1, ::-1]  # rotate 180 degrees
+            depth = depth[::-1, ::-1]  # flip on both axes to align with trained policy and common convention
             depths[self.depth_name_mapping[depth_name]] = depth
+
+            # if camera_name == "agentview_image":
+            #     cv2.imshow("RGB", cv2.cvtColor(raw_obs[camera_name].astype(np.uint8), cv2.COLOR_RGB2BGR))
+            #     depth_norm = cv2.normalize(get_real_depth_map(self._env.sim, raw_obs[depth_name]), None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+            #     cv2.imshow("Depth", depth_norm)
+            #     cv2.waitKey(1)
 
         state = np.concatenate(
             (
@@ -310,6 +318,8 @@ class LiberoEnv(gym.Env):
         raw_obs, reward, done, info = self._env.step(action)
 
         is_success = self._env.check_success()
+        # is_success = self._env.env.object_states_dict["white_yellow_mug_1"].get_geom_state()["pos"][2] > 0.50
+
         terminated = done or is_success
         info.update(
             {
