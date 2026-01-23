@@ -301,7 +301,6 @@ class Stage:
     sam3_third_person_prompt: str | None = None  # prompt for 3rd person camera
     sam3_first_person_prompt: str | None = None  # prompt for 1st person camera
     vs_camera: Literal["1st_person", "3rd_person"] | None = None  # camera used for visual servoing
-    sam3_stage: int = 0  # SAM3 stage counter - increment for each sam3 stage to trigger reset
     policy_instruction: str | None = None  # instruction for policy mode
     policy_task_index: int | None = None  # task index for policy mode
 
@@ -326,7 +325,6 @@ class System2:
                 sam3_third_person_prompt="yellow white mug",
                 sam3_first_person_prompt="yellow white mug",
                 vs_camera="3rd_person",
-                sam3_stage=0,
             ),
             Stage(
                 name="grasp_mug",
@@ -334,22 +332,20 @@ class System2:
                 success_criterion=SuccessPredictionForN(
                         required_steps=3,
                     ),
-                sam3_third_person_prompt="yellow white mug",
-                sam3_first_person_prompt="yellow white mug",
-                vs_camera=None,
-                sam3_stage=0,
-                policy_instruction="test_task",
-                policy_task_index=1
-            ),
-            Stage(
-                name="return_home",
-                mode="home",
-                success_criterion=TimestepCounter(required_steps=200),
                 sam3_third_person_prompt="left plate",
                 sam3_first_person_prompt="plate",
                 vs_camera=None,
-                sam3_stage=1,  # important to swtich SAM3 stage and prompte before starting next sam3 stage
+                policy_instruction="test_task",
+                policy_task_index=1
             ),
+            # Stage(
+            #     name="return_home",
+            #     mode="home",
+            #     success_criterion=TimestepCounter(required_steps=50),
+            #     sam3_third_person_prompt="left plate",
+            #     sam3_first_person_prompt="plate",
+            #     vs_camera=None,
+            # ),
             Stage(
                 name="move_to_plate",
                 mode="sam3",
@@ -361,65 +357,58 @@ class System2:
                 sam3_third_person_prompt="left plate",
                 sam3_first_person_prompt="plate",
                 vs_camera="3rd_person",
-                sam3_stage=1,
             ),
             Stage(
                 name="place_on_plate",
                 mode="policy",
                 success_criterion=SuccessPredictionForN(
-                        required_steps=3,
+                        required_steps=10,
                     ),
-                sam3_third_person_prompt="left plate",
-                sam3_first_person_prompt="plate",
+                sam3_third_person_prompt="grey mug on the right",
+                sam3_first_person_prompt="grey mug",
                 vs_camera=None,
-                sam3_stage=2,
                 policy_instruction="place yellow white mug",
                 policy_task_index=0,
             ),
-            Stage(
-                name="return_home",
-                mode="home",
-                success_criterion=TimestepCounter(required_steps=1000),
-                sam3_third_person_prompt=None,
-                sam3_first_person_prompt=None,
-                vs_camera=None,
-                sam3_stage=2,  # Same as grasp_mug since no SAM3 reset needed
-            ),
+            # Stage(
+            #     name="return_home",
+            #     mode="home",
+            #     success_criterion=TimestepCounter(required_steps=50),
+            #     sam3_third_person_prompt="grey mug on the right",
+            #     sam3_first_person_prompt="grey mug",
+            #     vs_camera=None,
+            # ),
             Stage(
                 name="approach_mug2",
                 mode="sam3",
                 success_criterion=DepthThreshold(
-                    threshold=0.2,
+                    threshold=0.15,
                     depth_key=VISUAL_SERVOING_SETTINGS["1st_person"]["depth_name"],
                     camera="1st_person",
                 ),
                 sam3_third_person_prompt="grey mug on the right",
                 sam3_first_person_prompt="grey mug",
                 vs_camera="3rd_person",
-                sam3_stage=3,
             ),
             Stage(
                 name="grasp_mug2",
                 mode="policy",
-                success_criterion=GripperClosedForN(
-                        threshold=0.02,
+                success_criterion=SuccessPredictionForN(
                         required_steps=10,
-                        state_key="observation.state",
-                        gripper_indices=(6, 7),
                     ),
                 sam3_third_person_prompt="grey mug on the right",
-                sam3_first_person_prompt=None,
+                sam3_first_person_prompt="grey mug",
                 vs_camera=None,
-                sam3_stage=3,
+                policy_instruction="test_task",
+                policy_task_index=1,
             ),
             Stage(
                 name="return_home",
                 mode="home",
                 success_criterion=TimestepCounter(required_steps=50),
-                sam3_third_person_prompt=None,
-                sam3_first_person_prompt=None,
+                sam3_third_person_prompt="right plate",
+                sam3_first_person_prompt="plate",
                 vs_camera=None,
-                sam3_stage=3,
             ),
             Stage(
                 name="move_to_plate2",
@@ -429,31 +418,21 @@ class System2:
                     depth_key=VISUAL_SERVOING_SETTINGS["1st_person"]["depth_name"],
                     camera="1st_person",
                 ),
-                sam3_third_person_prompt="left plate",
-                sam3_first_person_prompt=None,
+                sam3_third_person_prompt="right plate",
+                sam3_first_person_prompt="plate",
                 vs_camera="3rd_person",
-                sam3_stage=4,
             ),
             Stage(
                 name="place_on_plate2",
                 mode="policy",
-                success_criterion=AndCriterion(
-                    criterion_a=DepthThresholdAbove(
-                        threshold=0.2,
-                        depth_key=VISUAL_SERVOING_SETTINGS["1st_person"]["depth_name"],
-                        camera="1st_person",
-                    ),
-                    criterion_b=GripperOpenedForN(
-                        threshold=0.02,
+                success_criterion=SuccessPredictionForN(
                         required_steps=10,
-                        state_key="observation.state",
-                        gripper_indices=(6, 7),
                     ),
-                ),
-                sam3_third_person_prompt="plate",
-                sam3_first_person_prompt=None,
+                sam3_third_person_prompt="right plate",
+                sam3_first_person_prompt="plate",
                 vs_camera=None,
-                sam3_stage=4,
+                policy_instruction="place yellow white mug",
+                policy_task_index=0,
             ),
             Stage(
                 name="return_home",
@@ -462,16 +441,12 @@ class System2:
                 sam3_third_person_prompt=None,
                 sam3_first_person_prompt=None,
                 vs_camera=None,
-                sam3_stage=4,
             ),
         ]
         self.current_stage_index = 0
 
     def get_current_stage(self) -> Stage:
         return self.stages[self.current_stage_index]
-
-    def get_sam3_stage(self) -> int:
-        return self.get_current_stage().sam3_stage
 
     def check_and_advance(
         self,

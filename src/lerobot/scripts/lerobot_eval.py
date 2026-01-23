@@ -194,14 +194,13 @@ class SAM3StreamClient:
         return image_batch
 
     def send_frame_batched(
-        self, observation: dict, sam3_stage: int, prompt: str | dict[str, str] | None = None
+        self, observation: dict, prompt: str | dict[str, str] | None = None
     ) -> bool:
         """
         Send batched RGB frames from observation to SAM3.
 
         Args:
             observation: Observation dict containing RGB images.
-            sam3_stage: SAM3 stage counter. Server resets when this increases.
             prompt: Text prompt(s) for segmentation. Can be:
                 - str: same prompt for all cameras (backward compatible)
                 - dict: {camera_name: prompt} for per-camera prompts
@@ -235,7 +234,6 @@ class SAM3StreamClient:
         # Pack message with msgpack
         msg = msgpack.packb({
             "prompt": prompt,
-            "sam3_stage": sam3_stage,
             "frames": rgb_batch.tobytes(),
         }, use_bin_type=True)
 
@@ -430,7 +428,7 @@ def VS_first_person(
 
 def move_to_home(
     observation: dict,
-    gain: float = 0.5,
+    gain: float = 4,
 ) -> np.ndarray:
     """
     Generate action to move the robot end-effector to a predefined home position.
@@ -716,12 +714,11 @@ def rollout(
 
             sam3_client.send_frame_batched(
                 observation,
-                sam3_stage=current_stage.sam3_stage,
                 prompt=camera_prompts
             )
             segmented_frames = sam3_client.receive_segmented_frame()
 
-        # Check System2 stage advancement every step (independent of SAM3)
+        # Check System2 stage advancement every step
         _ = system2.check_and_advance(
             observation=observation,
             segmented_frames=segmented_frames,
@@ -763,7 +760,7 @@ def rollout(
                     depth_observation=depth_obs,
                     camera_info=camera_info,
                     current_ee_pos=current_ee_pos,
-                    gain=np.array([6, 6, 2])
+                    gain=np.array([8, 8, 3]) # TODO same gain in all dirs
                 )
             elif stage_camera == "1st_person":
                 action_np = servoing_fnc(
@@ -776,7 +773,6 @@ def rollout(
             else:
                 raise ValueError(f"Unknown visual servoing camera: {stage_camera}")
             action = torch.from_numpy(action_np).unsqueeze(0)  # Add batch dim
-
         # Use policy if in policy mode
         elif current_stage.mode == "policy":
             # Infer "task" from attributes of environments.
@@ -794,7 +790,7 @@ def rollout(
         elif current_stage.mode == "home":
             action_np = move_to_home(
                 observation=observation,
-                gain=0.5,
+                gain=4,
             )
             action = torch.from_numpy(action_np).unsqueeze(0)  # Add batch dim
         
